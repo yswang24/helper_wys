@@ -27,6 +27,11 @@ export function stopStreaming(): void {
   activeAbort = null
 }
 
+export function forceResetStreaming(): void {
+  activeAbort = null
+  isStreaming = false
+}
+
 export function setConfig(partial: Partial<LLMConfig>): void {
   currentConfig = { ...currentConfig, ...partial }
 }

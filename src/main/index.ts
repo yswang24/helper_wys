@@ -8,7 +8,7 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamCodingAnswer, stopStreaming, setConfig, getConfig } from './llm'
+import { streamAnswer, streamCodingAnswer, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
@@ -348,9 +348,30 @@ ipcMain.on('config:set', (_e, partial) => {
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
+function waitForStreamEnd(callback: () => void): void {
+  if (!isCurrentlyStreaming()) { callback(); return }
+  let checks = 0
+  const tick = () => {
+    if (!isCurrentlyStreaming()) { callback(); return }
+    if (++checks > 80) {   // 80 * 50ms = 4s max
+      forceResetStreaming()
+      callback()
+      return
+    }
+    setTimeout(tick, 50)
+  }
+  tick()
+}
+
 ipcMain.on('llm:ask', (_e, question: string) => {
   if (!overlayWindow) return
-  streamAnswer(question, overlayWindow)
+  const start = () => streamAnswer(question, overlayWindow!)
+  if (isCurrentlyStreaming()) {
+    stopStreaming()
+    waitForStreamEnd(start)
+    return
+  }
+  start()
 })
 
 ipcMain.on('llm:clear', () => {
@@ -374,7 +395,13 @@ ipcMain.on('asr:transcript', (_e, data: { text: string; isFinal: boolean }) => {
 // Overlay asks main to auto-submit a transcribed question to LLM
 ipcMain.on('asr:auto-ask', (_e, question: string) => {
   if (!overlayWindow) return
-  streamAnswer(question, overlayWindow)
+  const start = () => streamAnswer(question, overlayWindow!)
+  if (isCurrentlyStreaming()) {
+    stopStreaming()
+    waitForStreamEnd(start)
+    return
+  }
+  start()
 })
 
 // Main window sets ASR language; forward to overlay
@@ -436,7 +463,13 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
 
     selectorWindow?.close()
 
-    await streamCodingAnswer(imageBase64, overlayWindow)
+    const startCoding = () => streamCodingAnswer(imageBase64, overlayWindow!)
+    if (isCurrentlyStreaming()) {
+      stopStreaming()
+      waitForStreamEnd(startCoding)
+    } else {
+      startCoding()
+    }
   } catch (err) {
     selectorWindow?.close()
     const msg = err instanceof Error ? err.message : String(err)
