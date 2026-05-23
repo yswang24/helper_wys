@@ -229,7 +229,10 @@ const HALLUCINATION_RE = /点赞|订阅|转发|打赏|谢谢大家|明镜|优优
 function VoiceTab() {
   const [listening, setListening] = useState(false)
   const [lang, setLang] = useState<'zh-CN' | 'en-US'>('zh-CN')
-  const [audioSource, setAudioSource] = useState<'mic' | 'system'>('system')
+  // macOS 系统音频回环(loopback)捕获不稳定，默认使用麦克风
+  const [audioSource, setAudioSource] = useState<'mic' | 'system'>(
+    window.electronAPI.platform === 'darwin' ? 'mic' : 'system'
+  )
   const [transcriptLines, setTranscriptLines] = useState<string[]>([])
   const [error, setError] = useState('')
   const transcriptRef = useRef<HTMLDivElement>(null)
@@ -327,7 +330,13 @@ function VoiceTab() {
       startCycle()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      setError(src === 'system' ? `系统音频失败: ${msg}` : `麦克风失败: ${msg}`)
+      if (src === 'system' && window.electronAPI.platform === 'darwin') {
+        setError(
+          `macOS 系统音频捕获失败：${msg}。建议切换到「麦克风」模式，或前往 系统设置 → 隐私与安全性 → 屏幕录制，给 Terminal 授权后重启应用。`
+        )
+      } else {
+        setError(src === 'system' ? `系统音频失败: ${msg}` : `麦克风失败: ${msg}`)
+      }
     }
   }
 
