@@ -478,6 +478,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [asrApiKey, setAsrApiKey] = useState('')
   const [asrBaseUrl, setAsrBaseUrl] = useState('https://api.openai.com/v1')
   const [asrModel, setAsrModel] = useState('whisper-1')
+  const [overlayOpacity, setOverlayOpacity] = useState(0.94)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
@@ -489,11 +490,12 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       if (cfg.asrApiKey) setAsrApiKey(cfg.asrApiKey)
       if (cfg.asrBaseUrl) setAsrBaseUrl(cfg.asrBaseUrl)
       if (cfg.asrModel) setAsrModel(cfg.asrModel)
+      if (cfg.overlayOpacity !== undefined) setOverlayOpacity(cfg.overlayOpacity)
     })
   }, [])
 
   const save = () => {
-    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel })
+    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity: String(overlayOpacity) })
     setSaved(true)
     onSaved?.()
     setTimeout(() => setSaved(false), 2000)
@@ -501,6 +503,36 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <div className="flex flex-col gap-4 p-4 overflow-y-auto h-full">
+      {/* Overlay appearance */}
+      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#3b82f6' }}>
+        悬浮窗外观
+      </div>
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          背景透明度
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          调节覆盖层背景透明度（{Math.round(overlayOpacity * 100)}%）
+        </div>
+        <input
+          type="range"
+          min={0.3}
+          max={0.99}
+          step={0.01}
+          value={overlayOpacity}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value)
+            setOverlayOpacity(v)
+            window.electronAPI.setConfig({ overlayOpacity: String(v) })
+          }}
+          className="w-full"
+          style={{ accentColor: '#3b82f6' }}
+        />
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop: '1px solid #1e1e2e' }} />
+
       {/* LLM section */}
       <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#3b82f6' }}>
         AI 问答（LLM）

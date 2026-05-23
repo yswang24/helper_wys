@@ -22,6 +22,9 @@ export function App() {
   const [listening, setListening] = useState(false)
   const [finalLines, setFinalLines] = useState<string[]>([])
 
+  // Appearance
+  const [bgOpacity, setBgOpacity] = useState(0.94)
+
   // Manual input
   const [showInput, setShowInput] = useState(false)
   const [inputText, setInputText] = useState('')
@@ -34,6 +37,15 @@ export function App() {
     setInputText('')
     setShowInput(false)
   }, [inputText])
+
+  // ── Appearance: opacity ─────────────────────────────────────────────────────
+  useEffect(() => {
+    window.electronAPI.getConfig().then((cfg) => {
+      if (cfg.overlayOpacity !== undefined) setBgOpacity(cfg.overlayOpacity)
+    })
+    const un = window.electronAPI.onOverlayOpacity((opacity) => setBgOpacity(opacity))
+    return un
+  }, [])
 
   // ── Receive transcripts from main window (via main process) ─────────────────
   useEffect(() => {
@@ -101,7 +113,7 @@ export function App() {
         ref={panelRef}
         className="flex flex-col rounded-xl overflow-hidden shadow-2xl"
         style={{
-          background: 'rgba(10, 10, 16, 0.94)',
+          background: `rgba(10, 10, 16, ${bgOpacity})`,
           border: '1px solid rgba(70, 70, 110, 0.6)',
           backdropFilter: 'blur(16px)',
           maxWidth: 490,
@@ -112,7 +124,7 @@ export function App() {
         <div
           className="flex items-center gap-2 px-3 py-2 border-b flex-shrink-0 cursor-move"
           style={{
-            background: 'rgba(20, 20, 35, 0.9)',
+            background: `rgba(20, 20, 35, ${Math.min(bgOpacity + 0.06, 0.98)})`,
             borderColor: 'rgba(70, 70, 110, 0.5)',
             WebkitAppRegion: 'drag'
           } as React.CSSProperties}

@@ -12,6 +12,7 @@ interface PersistedConfig {
   asrModel?: string
   overlayX?: number
   overlayY?: number
+  overlayOpacity?: number
 }
 
 const configPath = () => join(app.getPath('userData'), 'config.json')

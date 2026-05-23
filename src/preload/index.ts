@@ -101,6 +101,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transcribeChunk: (audio: ArrayBuffer, mimeType: string, lang: string): Promise<string> =>
     ipcRenderer.invoke('asr:transcribe', audio, mimeType, lang),
 
+  // ── Overlay appearance ──────────────────────────────────────────────────────
+  onOverlayOpacity: (cb: (opacity: number) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, opacity: number) => cb(opacity)
+    ipcRenderer.on('overlay:opacity', handler)
+    return () => ipcRenderer.removeListener('overlay:opacity', handler)
+  },
+
   // ── Clipboard ────────────────────────────────────────────────────────────────
   copyText: (text: string) => ipcRenderer.send('clipboard:copy', text),
 

@@ -249,6 +249,11 @@ app.whenReady().then(() => {
     persistConfig({ ...rest, overlayX: x, overlayY: y })
   })
 
+  // Apply saved overlay opacity
+  if (overlayWindow && saved.overlayOpacity !== undefined) {
+    overlayWindow.webContents.send('overlay:opacity', saved.overlayOpacity)
+  }
+
   globalShortcut.register('CommandOrControl+Shift+H', () => {
     if (!overlayWindow) return
     if (overlayWindow.isVisible()) { setOverlayUserVisible(false); overlayWindow.hide() }
@@ -306,29 +311,39 @@ ipcMain.handle('app:get-status', () => ({
 // ── IPC: config ───────────────────────────────────────────────────────────────
 ipcMain.handle('config:get', () => {
   const asr = getASRConfig()
+  const persisted = loadPersistedConfig()
   return {
     ...getConfig(),
     asrApiKey: asr.apiKey,
     asrBaseUrl: asr.baseUrl,
     asrModel: asr.model,
+    overlayOpacity: persisted.overlayOpacity ?? 0.94,
   }
 })
 
 ipcMain.on('config:set', (_e, partial) => {
   // Split LLM vs ASR fields
-  const { asrApiKey, asrBaseUrl, asrModel, ...llmPartial } = partial as Record<string, string>
-  if (Object.keys(llmPartial).length) setConfig(llmPartial)
+  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, ...llmPartial } = partial as Record<string, unknown>
+  if (Object.keys(llmPartial).length) setConfig(llmPartial as Record<string, string>)
   if (asrApiKey !== undefined || asrBaseUrl !== undefined || asrModel !== undefined) {
-    setASRConfig({ apiKey: asrApiKey, baseUrl: asrBaseUrl, model: asrModel })
+    setASRConfig({ apiKey: asrApiKey as string, baseUrl: asrBaseUrl as string, model: asrModel as string })
+  }
+  if (overlayOpacity !== undefined) {
+    const op = parseFloat(overlayOpacity as string)
+    overlayWindow?.webContents.send('overlay:opacity', op)
   }
   // Persist both sets, skip jobDescription
   const { jobDescription: _jd, ...llmSaveable } = getConfig()
   const asrSaveable = getASRConfig()
+  const persisted = loadPersistedConfig()
   persistConfig({
     ...llmSaveable,
     asrApiKey: asrSaveable.apiKey,
     asrBaseUrl: asrSaveable.baseUrl,
     asrModel: asrSaveable.model,
+    overlayX: persisted.overlayX,
+    overlayY: persisted.overlayY,
+    overlayOpacity: overlayOpacity !== undefined ? parseFloat(overlayOpacity as string) : persisted.overlayOpacity,
   })
 })
 
