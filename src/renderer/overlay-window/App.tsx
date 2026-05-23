@@ -202,6 +202,10 @@ export function App() {
               }}
               placeholder="输入问题... (Ctrl+Enter 发送，Esc 关闭)"
               rows={2}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               className="w-full text-xs rounded px-2 py-1.5 resize-none outline-none"
               style={{
                 background: 'rgba(20,30,60,0.6)',

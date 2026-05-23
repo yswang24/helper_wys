@@ -40,6 +40,9 @@ function createMainWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/main-window/index.html'))
   }
 
+  // Invisible to screen capture as well (safety net)
+  mainWindow.setContentProtection(true)
+
   // 点 X 关闭按钮 → 隐藏到托盘，不退出
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
@@ -64,7 +67,8 @@ function createOverlayWindow(): void {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: true,
-    type: 'toolbar',
+    hasShadow: false,
+    type: 'panel',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
