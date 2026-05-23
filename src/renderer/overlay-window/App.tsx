@@ -2,15 +2,21 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 
 type LLMStatus = 'idle' | 'streaming' | 'done' | 'error'
 
+interface HistoryItem {
+  id: number
+  question: string
+  answer: string
+  status: LLMStatus
+  errorMsg: string
+}
+
 export function App() {
   const panelRef = useRef<HTMLDivElement>(null)
   const answerEndRef = useRef<HTMLDivElement>(null)
+  const nextIdRef = useRef(1)
 
-  // LLM state
-  const [question, setQuestion] = useState('')
-  const [answer, setAnswer] = useState('')
-  const [llmStatus, setLlmStatus] = useState<LLMStatus>('idle')
-  const [errorMsg, setErrorMsg] = useState('')
+  // LLM history
+  const [history, setHistory] = useState<HistoryItem[]>([])
 
   // ASR state — overlay only displays, main window does the actual capture
   const [listening, setListening] = useState(false)
@@ -49,32 +55,41 @@ export function App() {
   // ── LLM events ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const unStart = window.electronAPI.onAnswerStart((q) => {
-      setQuestion(q)
-      setAnswer('')
-      setErrorMsg('')
-      setLlmStatus('streaming')
+      const id = nextIdRef.current++
+      setHistory((prev) => [...prev, { id, question: q, answer: '', status: 'streaming', errorMsg: '' }])
     })
     const unChunk = window.electronAPI.onAnswerChunk((chunk) => {
-      setAnswer((prev) => prev + chunk)
+      setHistory((prev) => {
+        if (prev.length === 0) return prev
+        const last = prev[prev.length - 1]
+        return [...prev.slice(0, -1), { ...last, answer: last.answer + chunk }]
+      })
     })
-    const unDone = window.electronAPI.onAnswerDone(() => setLlmStatus('done'))
+    const unDone = window.electronAPI.onAnswerDone(() => {
+      setHistory((prev) => {
+        if (prev.length === 0) return prev
+        const last = prev[prev.length - 1]
+        return [...prev.slice(0, -1), { ...last, status: 'done' as LLMStatus }]
+      })
+    })
     const unError = window.electronAPI.onAnswerError((msg) => {
-      setErrorMsg(msg)
-      setLlmStatus('error')
+      setHistory((prev) => {
+        if (prev.length === 0) return prev
+        const last = prev[prev.length - 1]
+        return [...prev.slice(0, -1), { ...last, status: 'error' as LLMStatus, errorMsg: msg }]
+      })
     })
     const unClear = window.electronAPI.onAnswerClear(() => {
-      setQuestion('')
-      setAnswer('')
-      setErrorMsg('')
-      setLlmStatus('idle')
+      setHistory([])
     })
     return () => { unStart(); unChunk(); unDone(); unError(); unClear() }
   }, [])
 
-  // Auto-scroll
+  // Auto-scroll to latest answer
+  const lastAnswer = history.length > 0 ? history[history.length - 1].answer : ''
   useEffect(() => {
     answerEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [answer])
+  }, [lastAnswer])
 
   // Mouse pass-through is now handled by main process cursor polling (index.ts)
 
@@ -102,7 +117,7 @@ export function App() {
             WebkitAppRegion: 'drag'
           } as React.CSSProperties}
         >
-          <StatusDot llm={llmStatus} listening={listening} />
+          <StatusDot llm={history.length > 0 ? history[history.length - 1].status : 'idle'} listening={listening} />
           <span className="text-xs font-medium" style={{ color: '#94a3b8' }}>
             Interview Assistant
           </span>
@@ -125,7 +140,21 @@ export function App() {
             >
               ✎ 输入
             </button>
-            <span className="text-xs" style={{ color: '#1e293b' }}>H·X·L·S</span>
+            {history.length > 0 && (
+              <button
+                onClick={() => setHistory([])}
+                className="text-xs px-2 py-0.5 rounded transition-colors"
+                style={{
+                  background: 'transparent',
+                  color: '#334155',
+                  border: '1px solid transparent',
+                  cursor: 'pointer',
+                  WebkitAppRegion: 'no-drag'
+                } as React.CSSProperties}
+              >
+                清空
+              </button>
+            )}
           </div>
         </div>
 
@@ -170,19 +199,6 @@ export function App() {
             ) : (
               <div className="text-xs italic" style={{ color: '#1e293b' }}>等待音频...</div>
             )}
-          </div>
-        )}
-
-        {/* Question label */}
-        {question && (
-          <div
-            className="px-3 py-2 border-b flex-shrink-0"
-            style={{ borderColor: 'rgba(50, 50, 80, 0.4)', background: 'rgba(15, 15, 28, 0.5)' }}
-          >
-            <div className="text-xs" style={{ color: '#475569' }}>问题</div>
-            <div className="text-xs mt-0.5 leading-relaxed" style={{ color: '#64748b' }}>
-              {question}
-            </div>
           </div>
         )}
 
@@ -241,47 +257,71 @@ export function App() {
 
         {/* Answer area */}
         <div className="flex-1 overflow-y-auto px-3 py-3" style={{ minHeight: 80 }}>
-          {llmStatus === 'idle' && !answer && (
+          {history.length === 0 && (
             <div className="text-xs italic" style={{ color: '#1e293b' }}>
               {listening ? '检测到完整问题后自动回答...' : '等待提问...'}
             </div>
           )}
-          {llmStatus === 'error' && (
-            <div
-              className="text-xs rounded-lg p-2"
-              style={{ background: 'rgba(120, 20, 20, 0.4)', color: '#f87171' }}
-            >
-              ⚠ {errorMsg}
+          {history.map((item, idx) => (
+            <div key={item.id} className="mb-4">
+              {/* Question */}
+              <div
+                className="px-3 py-2 border-b flex-shrink-0 mb-2"
+                style={{ borderColor: 'rgba(50, 50, 80, 0.4)', background: 'rgba(15, 15, 28, 0.5)' }}
+              >
+                <div className="text-xs" style={{ color: '#475569' }}>问题</div>
+                <div className="text-xs mt-0.5 leading-relaxed" style={{ color: '#64748b' }}>
+                  {item.question}
+                </div>
+              </div>
+
+              {/* Answer */}
+              {item.status === 'error' && (
+                <div
+                  className="text-xs rounded-lg p-2"
+                  style={{ background: 'rgba(120, 20, 20, 0.4)', color: '#f87171' }}
+                >
+                  ⚠ {item.errorMsg}
+                </div>
+              )}
+              {item.answer && <AnswerText text={item.answer} streaming={item.status === 'streaming'} />}
+
+              {idx < history.length - 1 && (
+                <div className="mt-3 pt-3 border-t" style={{ borderColor: 'rgba(50, 50, 80, 0.3)' }} />
+              )}
             </div>
-          )}
-          {answer && <AnswerText text={answer} streaming={llmStatus === 'streaming'} />}
+          ))}
           <div ref={answerEndRef} />
         </div>
 
         {/* Status / action bar */}
-        {(llmStatus === 'streaming' || (llmStatus === 'done' && answer)) && (
-          <div
-            className="px-3 py-1.5 text-xs flex items-center gap-2 border-t flex-shrink-0"
-            style={{ borderColor: 'rgba(50, 50, 80, 0.4)' }}
-          >
-            {llmStatus === 'streaming' && (
-              <>
-                <span className="animate-pulse" style={{ color: '#4ade80' }}>●</span>
-                <span style={{ color: '#4ade80' }}>正在生成...</span>
-                <button
-                  onClick={() => window.electronAPI.stopAnswer()}
-                  className="ml-auto px-2 py-0.5 rounded text-xs"
-                  style={{ background: 'rgba(220,38,38,0.15)', color: '#f87171', border: '1px solid rgba(220,38,38,0.3)', cursor: 'pointer' }}
-                >
-                  停止
-                </button>
-              </>
-            )}
-            {llmStatus === 'done' && answer && (
-              <CopyButton text={answer} />
-            )}
-          </div>
-        )}
+        {history.length > 0 && (() => {
+          const last = history[history.length - 1]
+          if (last.status !== 'streaming' && !(last.status === 'done' && last.answer)) return null
+          return (
+            <div
+              className="px-3 py-1.5 text-xs flex items-center gap-2 border-t flex-shrink-0"
+              style={{ borderColor: 'rgba(50, 50, 80, 0.4)' }}
+            >
+              {last.status === 'streaming' && (
+                <>
+                  <span className="animate-pulse" style={{ color: '#4ade80' }}>●</span>
+                  <span style={{ color: '#4ade80' }}>正在生成...</span>
+                  <button
+                    onClick={() => window.electronAPI.stopAnswer()}
+                    className="ml-auto px-2 py-0.5 rounded text-xs"
+                    style={{ background: 'rgba(220,38,38,0.15)', color: '#f87171', border: '1px solid rgba(220,38,38,0.3)', cursor: 'pointer' }}
+                  >
+                    停止
+                  </button>
+                </>
+              )}
+              {last.status === 'done' && last.answer && (
+                <CopyButton text={last.answer} />
+              )}
+            </div>
+          )
+        })()}
       </div>
     </div>
   )
