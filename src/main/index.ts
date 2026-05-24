@@ -16,6 +16,7 @@ let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let selectorWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+let overlayUserVisible = true  // tracks whether user wants overlay visible
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -47,6 +48,7 @@ function createMainWindow(): void {
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault()
+      overlayUserVisible = false
       mainWindow?.hide()
       overlayWindow?.hide()
     }
@@ -169,8 +171,6 @@ app.whenReady().then(() => {
   // ── Mouse pass-through: poll cursor position every 50ms ───────────────────
   // setIgnoreMouseEvents(true, {forward:true}) prevents mouseenter from firing
   // in the renderer, so we track cursor in the main process instead.
-  let overlayUserVisible = true  // tracks whether user wants overlay visible
-
   setInterval(() => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
@@ -191,8 +191,6 @@ app.whenReady().then(() => {
 
   // Track user intent so heartbeat knows when NOT to restore
   overlayWindow.on('hide', () => { /* overlayUserVisible updated by tray/shortcut handlers */ })
-  // Expose setter for tray and shortcut code below
-  const setOverlayUserVisible = (v: boolean) => { overlayUserVisible = v }
 
   // ── System tray ──────────────────────────────────────────────────────────────
   const iconPath = join(__dirname, '../../resources/icon.png')
@@ -214,8 +212,8 @@ app.whenReady().then(() => {
       {
         label: overlayWindow?.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
         click: () => {
-          if (overlayWindow?.isVisible()) { setOverlayUserVisible(false); overlayWindow.hide() }
-          else { setOverlayUserVisible(true); overlayWindow?.show() }
+          if (overlayWindow?.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
+          else { overlayUserVisible = true; overlayWindow?.show() }
         }
       },
       { type: 'separator' },
@@ -257,8 +255,8 @@ app.whenReady().then(() => {
 
   globalShortcut.register('CommandOrControl+Shift+H', () => {
     if (!overlayWindow) return
-    if (overlayWindow.isVisible()) { setOverlayUserVisible(false); overlayWindow.hide() }
-    else { setOverlayUserVisible(true); overlayWindow.show() }
+    if (overlayWindow.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
+    else { overlayUserVisible = true; overlayWindow.show() }
   })
 
   // Ctrl+Shift+M — 显示/隐藏设置主窗口
@@ -288,8 +286,15 @@ app.whenReady().then(() => {
   })
 })
 
+// Hide from Dock on macOS (stealth helper tool)
+if (process.platform === 'darwin') app.dock.hide()
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
+})
+
+app.on('before-quit', () => {
+  app.isQuitting = true
 })
 
 app.on('will-quit', () => {
