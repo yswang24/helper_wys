@@ -43,11 +43,12 @@ function createMainWindow(): void {
   // Invisible to screen capture as well (safety net)
   mainWindow.setContentProtection(true)
 
-  // 点 X 关闭按钮 → 隐藏到托盘，不退出
+  // 点 X 关闭按钮 → 隐藏主窗口 + 悬浮窗到托盘，不退出
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault()
       mainWindow?.hide()
+      overlayWindow?.hide()
     }
   })
 
