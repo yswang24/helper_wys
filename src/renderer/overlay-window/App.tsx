@@ -108,16 +108,15 @@ export function App() {
   const allTranscript = finalLines.join(' ')
 
   return (
-    <div className="h-screen w-screen overflow-hidden p-3 select-none">
+    <div className="h-screen w-screen overflow-hidden select-none" style={{ pointerEvents: 'none' } as React.CSSProperties}>
       <div
         ref={panelRef}
-        className="flex flex-col rounded-xl overflow-hidden shadow-2xl"
+        className="flex flex-col rounded-xl overflow-hidden shadow-2xl h-full w-full"
         style={{
           background: `rgba(10, 10, 16, ${bgOpacity})`,
           border: '1px solid rgba(70, 70, 110, 0.6)',
           backdropFilter: 'blur(16px)',
-          maxWidth: 490,
-          maxHeight: 'calc(100vh - 24px)'
+          pointerEvents: 'auto'
         }}
       >
         {/* Drag handle */}

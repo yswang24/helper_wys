@@ -83,6 +83,7 @@ function createOverlayWindow(): void {
   overlayWindow.setContentProtection(true)
   // screen-saver level keeps overlay above conferencing app overlays on Windows
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  // Always forward mouse events so overlay can use CSS pointer-events for precise hit regions
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
@@ -168,29 +169,33 @@ app.whenReady().then(() => {
   createMainWindow()
   createOverlayWindow()
 
-  // ── Mouse pass-through: poll cursor position every 50ms ───────────────────
-  // setIgnoreMouseEvents(true, {forward:true}) prevents mouseenter from firing
-  // in the renderer, so we track cursor in the main process instead.
+  // ── Mouse pass-through + heartbeat ─────────────────────────────────────────
+  // Dynamically toggle setIgnoreMouseEvents so the overlay only intercepts
+  // clicks when the cursor is actually inside the window bounds.
+  let lastIgnoreState = true
+
   setInterval(() => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
-    // Heartbeat: restore overlay if it was hidden by OS/conferencing app
+    // Restore overlay if it was hidden by OS/conferencing app
     if (overlayUserVisible && !overlayWindow.isVisible()) {
       overlayWindow.show()
       overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+      lastIgnoreState = true
     }
 
     if (!overlayWindow.isVisible()) return
-    // Both getCursorScreenPoint and getPosition return logical (DIP) pixels — no scaling needed
-    const { x: cx, y: cy } = screen.getCursorScreenPoint()
-    const [wx, wy] = overlayWindow.getPosition()
-    const [ww, wh] = overlayWindow.getSize()
-    const isOver = cx >= wx && cx <= wx + ww && cy >= wy && cy <= wy + wh
-    overlayWindow.setIgnoreMouseEvents(!isOver, { forward: true })
-  }, 50)
 
-  // Track user intent so heartbeat knows when NOT to restore
-  overlayWindow.on('hide', () => { /* overlayUserVisible updated by tray/shortcut handlers */ })
+    const { x: cx, y: cy } = screen.getCursorScreenPoint()
+    const bounds = overlayWindow.getBounds()
+    const isOver = cx >= bounds.x && cx < bounds.x + bounds.width && cy >= bounds.y && cy < bounds.y + bounds.height
+    const shouldIgnore = !isOver
+
+    if (shouldIgnore !== lastIgnoreState) {
+      overlayWindow.setIgnoreMouseEvents(shouldIgnore, { forward: true })
+      lastIgnoreState = shouldIgnore
+    }
+  }, 50)
 
   // ── System tray ──────────────────────────────────────────────────────────────
   const iconPath = join(__dirname, '../../resources/icon.png')
