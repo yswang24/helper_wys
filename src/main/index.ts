@@ -16,6 +16,7 @@ let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let selectorWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+let overlayUserVisible = true  // tracks whether user wants overlay visible
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -43,11 +44,13 @@ function createMainWindow(): void {
   // Invisible to screen capture as well (safety net)
   mainWindow.setContentProtection(true)
 
-  // 点 X 关闭按钮 → 隐藏到托盘，不退出
+  // 点 X 关闭按钮 → 隐藏主窗口 + 悬浮窗到托盘，不退出
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault()
+      overlayUserVisible = false
       mainWindow?.hide()
+      overlayWindow?.hide()
     }
   })
 
@@ -80,6 +83,7 @@ function createOverlayWindow(): void {
   overlayWindow.setContentProtection(true)
   // screen-saver level keeps overlay above conferencing app overlays on Windows
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  // Always forward mouse events so overlay can use CSS pointer-events for precise hit regions
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
@@ -165,33 +169,33 @@ app.whenReady().then(() => {
   createMainWindow()
   createOverlayWindow()
 
-  // ── Mouse pass-through: poll cursor position every 50ms ───────────────────
-  // setIgnoreMouseEvents(true, {forward:true}) prevents mouseenter from firing
-  // in the renderer, so we track cursor in the main process instead.
-  let overlayUserVisible = true  // tracks whether user wants overlay visible
+  // ── Mouse pass-through + heartbeat ─────────────────────────────────────────
+  // Dynamically toggle setIgnoreMouseEvents so the overlay only intercepts
+  // clicks when the cursor is actually inside the window bounds.
+  let lastIgnoreState = true
 
   setInterval(() => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
-    // Heartbeat: restore overlay if it was hidden by OS/conferencing app
+    // Restore overlay if it was hidden by OS/conferencing app
     if (overlayUserVisible && !overlayWindow.isVisible()) {
       overlayWindow.show()
       overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+      lastIgnoreState = true
     }
 
     if (!overlayWindow.isVisible()) return
-    // Both getCursorScreenPoint and getPosition return logical (DIP) pixels — no scaling needed
-    const { x: cx, y: cy } = screen.getCursorScreenPoint()
-    const [wx, wy] = overlayWindow.getPosition()
-    const [ww, wh] = overlayWindow.getSize()
-    const isOver = cx >= wx && cx <= wx + ww && cy >= wy && cy <= wy + wh
-    overlayWindow.setIgnoreMouseEvents(!isOver, { forward: true })
-  }, 50)
 
-  // Track user intent so heartbeat knows when NOT to restore
-  overlayWindow.on('hide', () => { /* overlayUserVisible updated by tray/shortcut handlers */ })
-  // Expose setter for tray and shortcut code below
-  const setOverlayUserVisible = (v: boolean) => { overlayUserVisible = v }
+    const { x: cx, y: cy } = screen.getCursorScreenPoint()
+    const bounds = overlayWindow.getBounds()
+    const isOver = cx >= bounds.x && cx < bounds.x + bounds.width && cy >= bounds.y && cy < bounds.y + bounds.height
+    const shouldIgnore = !isOver
+
+    if (shouldIgnore !== lastIgnoreState) {
+      overlayWindow.setIgnoreMouseEvents(shouldIgnore, { forward: true })
+      lastIgnoreState = shouldIgnore
+    }
+  }, 50)
 
   // ── System tray ──────────────────────────────────────────────────────────────
   const iconPath = join(__dirname, '../../resources/icon.png')
@@ -213,8 +217,8 @@ app.whenReady().then(() => {
       {
         label: overlayWindow?.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
         click: () => {
-          if (overlayWindow?.isVisible()) { setOverlayUserVisible(false); overlayWindow.hide() }
-          else { setOverlayUserVisible(true); overlayWindow?.show() }
+          if (overlayWindow?.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
+          else { overlayUserVisible = true; overlayWindow?.show() }
         }
       },
       { type: 'separator' },
@@ -256,8 +260,8 @@ app.whenReady().then(() => {
 
   globalShortcut.register('CommandOrControl+Shift+H', () => {
     if (!overlayWindow) return
-    if (overlayWindow.isVisible()) { setOverlayUserVisible(false); overlayWindow.hide() }
-    else { setOverlayUserVisible(true); overlayWindow.show() }
+    if (overlayWindow.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
+    else { overlayUserVisible = true; overlayWindow.show() }
   })
 
   // Ctrl+Shift+M — 显示/隐藏设置主窗口
