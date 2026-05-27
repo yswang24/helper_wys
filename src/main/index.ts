@@ -489,15 +489,22 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
   if (!overlayWindow) return
 
   try {
-    // Selector has content protection so it won't appear in capture — no need to hide/close
+    // Close selector immediately — it has content protection so won't affect capture
+    selectorWindow?.close()
+
     const display = screen.getPrimaryDisplay()
     const sf = display.scaleFactor  // e.g. 1.25 on 125% DPI
     const { width, height } = display.bounds  // logical pixels
 
-    const sources = await desktopCapturer.getSources({
+    // Timeout guard — desktopCapturer can hang on macOS without screen recording permission
+    const capturePromise = desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: Math.round(width * sf), height: Math.round(height * sf) }
     })
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('截图超时，请检查屏幕录制权限')), 10000)
+    )
+    const sources = await Promise.race([capturePromise, timeoutPromise])
 
     const source = sources[0]
     if (!source) throw new Error('无法获取屏幕截图')
@@ -531,12 +538,9 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
     fs.writeFileSync('/tmp/screenshot_debug.png', cropped.toPNG())
     console.log('[Screenshot] DEBUG: saved to /tmp/screenshot_debug.png and /tmp/screenshot_debug.b64')
 
-    selectorWindow?.close()
-
     // Step 1: Extract text from image via vision model
     extractImageText(imageBase64, overlayWindow!)
   } catch (err) {
-    selectorWindow?.close()
     const msg = err instanceof Error ? err.message : String(err)
     overlayWindow?.webContents.send('llm:error', `截图失败: ${msg}`)
   }

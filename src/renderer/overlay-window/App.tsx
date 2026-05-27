@@ -144,7 +144,7 @@ export function App() {
   const allTranscript = finalLines.join(' ')
 
   return (
-    <div className="h-screen w-screen overflow-hidden select-none" style={{ pointerEvents: 'none' } as React.CSSProperties}>
+    <div className="h-screen w-screen overflow-hidden" style={{ pointerEvents: 'none' } as React.CSSProperties}>
       <div
         ref={panelRef}
         className="flex flex-col rounded-xl overflow-hidden shadow-2xl h-full w-full"
