@@ -8,7 +8,7 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamCodingAnswer, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig } from './llm'
+import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
@@ -17,6 +17,7 @@ let overlayWindow: BrowserWindow | null = null
 let selectorWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let overlayUserVisible = true  // tracks whether user wants overlay visible
+let lastScreenshotBase64: string | null = null
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -289,6 +290,28 @@ app.whenReady().then(() => {
     }
     createSelectorWindow()
   })
+
+  // Capture overlay window directly via capturePage() — bypasses content protection
+  globalShortcut.register('CommandOrControl+Shift+O', async () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return
+    try {
+      const image = await overlayWindow.capturePage()
+      let captured: Electron.NativeImage = image
+      const maxSize = 2000
+      const { width, height } = captured.getSize()
+      if (width > maxSize || height > maxSize) {
+        const scale = maxSize / Math.max(width, height)
+        captured = captured.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
+      }
+      const imageBase64 = captured.toPNG().toString('base64')
+      lastScreenshotBase64 = imageBase64
+      console.log(`[OverlayCapture] captured: ${width}x${height}, size: ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
+      extractImageText(imageBase64, overlayWindow)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      overlayWindow.webContents.send('llm:error', `overlay截图失败: ${msg}`)
+    }
+  })
 })
 
 app.on('window-all-closed', () => {
@@ -326,6 +349,7 @@ ipcMain.handle('config:get', () => {
 })
 
 ipcMain.on('config:set', (_e, partial) => {
+  console.log('[Config] received:', partial)
   // Split LLM vs ASR fields
   const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, ...llmPartial } = partial as Record<string, unknown>
   if (Object.keys(llmPartial).length) setConfig(llmPartial as Record<string, string>)
@@ -386,6 +410,33 @@ ipcMain.on('llm:stop', () => {
   stopStreaming()
 })
 
+ipcMain.on('llm:reask-image', (_e, userContext: string) => {
+  if (!overlayWindow) return
+  if (!lastScreenshotBase64) {
+    overlayWindow.webContents.send('llm:error', '没有缓存的截图，请先截图')
+    return
+  }
+  const startImage = () => streamImageAnswer(lastScreenshotBase64!, overlayWindow!, userContext)
+  if (isCurrentlyStreaming()) {
+    stopStreaming()
+    waitForStreamEnd(startImage)
+  } else {
+    startImage()
+  }
+})
+
+// Overlay sends extracted text → LLM answers
+ipcMain.on('llm:ask-extracted', (_e, text: string) => {
+  if (!overlayWindow) return
+  const start = () => streamAnswer(text, overlayWindow!)
+  if (isCurrentlyStreaming()) {
+    stopStreaming()
+    waitForStreamEnd(start)
+  } else {
+    start()
+  }
+})
+
 // ── IPC: ASR control (main window → overlay) ──────────────────────────────────
 // Main window sends start/stop commands; overlay runs SpeechRecognition
 ipcMain.on('asr:start', () => overlayWindow?.webContents.send('asr:start'))
@@ -438,42 +489,52 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
   if (!overlayWindow) return
 
   try {
-    // Hide selector before capture — it's not content-protected so it would appear in the screenshot
-    selectorWindow?.hide()
-    await new Promise<void>((resolve) => setTimeout(resolve, 150))
-
+    // Selector has content protection so it won't appear in capture — no need to hide/close
     const display = screen.getPrimaryDisplay()
     const sf = display.scaleFactor  // e.g. 1.25 on 125% DPI
     const { width, height } = display.bounds  // logical pixels
 
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      // Request at physical pixel resolution so crop coords can be scaled correctly
       thumbnailSize: { width: Math.round(width * sf), height: Math.round(height * sf) }
     })
 
     const source = sources[0]
     if (!source) throw new Error('无法获取屏幕截图')
 
+    // DEBUG: save full screenshot
+    const fs = require('fs')
+    fs.writeFileSync('/tmp/screenshot_full.png', source.thumbnail.toPNG())
+    console.log(`[Screenshot] full screen: ${source.thumbnail.getSize().width}x${source.thumbnail.getSize().height}`)
+
     // Region coords from renderer are logical pixels — scale to physical pixels
-    const cropped = source.thumbnail.crop({
+    let cropped = source.thumbnail.crop({
       x: Math.round(region.x * sf),
       y: Math.round(region.y * sf),
       width: Math.round(region.w * sf),
       height: Math.round(region.h * sf)
     })
 
+    // Downscale if too large — keeps API calls fast and avoids timeouts
+    const maxSize = 2000
+    const cropW = cropped.getSize().width
+    const cropH = cropped.getSize().height
+    if (cropW > maxSize || cropH > maxSize) {
+      const scale = maxSize / Math.max(cropW, cropH)
+      cropped = cropped.resize({ width: Math.round(cropW * scale), height: Math.round(cropH * scale) })
+    }
+
     const imageBase64 = cropped.toPNG().toString('base64')
+    lastScreenshotBase64 = imageBase64
+    console.log(`[Screenshot] captured: ${region.w}x${region.h}, original: ${cropW}x${cropH}, sent: ${cropped.getSize().width}x${cropped.getSize().height}, size: ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
+    fs.writeFileSync('/tmp/screenshot_debug.b64', imageBase64)
+    fs.writeFileSync('/tmp/screenshot_debug.png', cropped.toPNG())
+    console.log('[Screenshot] DEBUG: saved to /tmp/screenshot_debug.png and /tmp/screenshot_debug.b64')
 
     selectorWindow?.close()
 
-    const startCoding = () => streamCodingAnswer(imageBase64, overlayWindow!)
-    if (isCurrentlyStreaming()) {
-      stopStreaming()
-      waitForStreamEnd(startCoding)
-    } else {
-      startCoding()
-    }
+    // Step 1: Extract text from image via vision model
+    extractImageText(imageBase64, overlayWindow!)
   } catch (err) {
     selectorWindow?.close()
     const msg = err instanceof Error ? err.message : String(err)

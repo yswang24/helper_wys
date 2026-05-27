@@ -34,6 +34,7 @@ export function forceResetStreaming(): void {
 
 export function setConfig(partial: Partial<LLMConfig>): void {
   currentConfig = { ...currentConfig, ...partial }
+  console.log('[LLM] config updated:', { baseUrl: currentConfig.baseUrl, model: currentConfig.model, visionModel: currentConfig.visionModel })
 }
 
 export function getConfig(): LLMConfig {
@@ -100,9 +101,69 @@ export async function streamAnswer(
   }
 }
 
-export async function streamCodingAnswer(
+export async function extractImageText(
   imageBase64: string,
   overlayWindow: BrowserWindow
+): Promise<void> {
+  if (!currentConfig.apiKey) {
+    overlayWindow.webContents.send('llm:error', '请先在设置中填写 API Key')
+    return
+  }
+
+  const client = new OpenAI({
+    apiKey: currentConfig.apiKey,
+    baseURL: currentConfig.baseUrl,
+    dangerouslyAllowBrowser: true
+  })
+
+  const useModel = currentConfig.visionModel || currentConfig.model
+  console.log(`[ImageOCR] model=${useModel}, baseURL=${currentConfig.baseUrl}, imageSize=${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
+
+  // Notify overlay that extraction is starting
+  overlayWindow.webContents.send('image:status', 'extracting')
+
+  try {
+    const timeout = AbortSignal.timeout(60000)
+    const result = await client.chat.completions.create({
+      model: useModel,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
+            { type: 'text', text: '请识别图片中的文字内容，直接输出文字。' }
+          ]
+        }
+      ],
+      max_tokens: 4000,
+      temperature: 0
+    }, { signal: timeout })
+
+    const text = result.choices[0]?.message?.content ?? ''
+    console.log(`[ImageOCR] done, extracted ${text.length} chars, usage: ${JSON.stringify(result.usage)}`)
+    console.log(`[ImageOCR] preview: ${text.slice(0, 200)}`)
+    if (text.trim()) {
+      overlayWindow.webContents.send('image:text', text)
+    } else {
+      overlayWindow.webContents.send('image:error', '视觉模型返回了空内容，请检查模型是否支持图片输入')
+    }
+  } catch (err: unknown) {
+    console.error('[ImageOCR] error:', JSON.stringify(err, null, 2))
+    let msg = err instanceof Error ? err.message : String(err)
+    if (err && typeof err === 'object' && 'error' in err) {
+      const detail = (err as Record<string, unknown>).error
+      if (detail && typeof detail === 'object' && 'message' in detail) {
+        msg += ` — ${(detail as Record<string, unknown>).message}`
+      }
+    }
+    overlayWindow.webContents.send('image:error', `识别失败: ${msg}\n[模型: ${useModel}]`)
+  }
+}
+
+export async function streamImageAnswer(
+  imageBase64: string,
+  overlayWindow: BrowserWindow,
+  userContext?: string
 ): Promise<void> {
   if (!currentConfig.apiKey) {
     overlayWindow.webContents.send('llm:error', '请先在设置中填写 API Key')
@@ -122,34 +183,47 @@ export async function streamCodingAnswer(
 
   const abort = new AbortController()
   activeAbort = abort
-  const label = '[截图题目]'
+  const label = '[图片识别]'
   isStreaming = true
   overlayWindow.webContents.send('llm:start', label)
 
+  const useModel = currentConfig.visionModel || currentConfig.model
+  console.log(`[ImageAnswer] model=${useModel}, baseURL=${currentConfig.baseUrl}, imageSize=${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
+
   try {
-    const stream = await client.chat.completions.create(
+    // Use non-streaming mode — many vision models (e.g. SiliconFlow Qwen-VL) don't support streaming
+    const result = await client.chat.completions.create(
       {
-        model: currentConfig.visionModel || currentConfig.model,
-        messages: buildCodingMessages(imageBase64, currentConfig.jobDescription),
-        stream: true,
-        max_tokens: 3000,
+        model: useModel,
+        messages: buildImageMessages(imageBase64, currentConfig.jobDescription, userContext),
+        max_tokens: 4000,
         temperature: 0.3
       },
       { signal: abort.signal }
     )
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content ?? ''
-      if (content) overlayWindow.webContents.send('llm:chunk', content)
+    const content = result.choices[0]?.message?.content ?? ''
+    console.log(`[ImageAnswer] done, response length=${content.length}`)
+    // Simulate streaming by sending in chunks for smooth UI
+    const chunkSize = 20
+    for (let i = 0; i < content.length; i += chunkSize) {
+      overlayWindow.webContents.send('llm:chunk', content.slice(i, i + chunkSize))
     }
-
     overlayWindow.webContents.send('llm:done')
   } catch (err: unknown) {
+    console.error('[ImageAnswer] error:', JSON.stringify(err, null, 2))
     if (err instanceof Error && err.name === 'AbortError') {
       overlayWindow.webContents.send('llm:done')
     } else {
-      const msg = err instanceof Error ? err.message : String(err)
-      overlayWindow.webContents.send('llm:error', msg)
+      let msg = err instanceof Error ? err.message : String(err)
+      // Try to extract more detail from OpenAI SDK error
+      if (err && typeof err === 'object' && 'error' in err) {
+        const detail = (err as Record<string, unknown>).error
+        if (detail && typeof detail === 'object' && 'message' in detail) {
+          msg += ` — ${(detail as Record<string, unknown>).message}`
+        }
+      }
+      overlayWindow.webContents.send('llm:error', `图片识别失败: ${msg}\n[URL: ${currentConfig.baseUrl}, 模型: ${useModel}]`)
     }
   } finally {
     isStreaming = false
@@ -157,33 +231,48 @@ export async function streamCodingAnswer(
   }
 }
 
-function buildCodingMessages(
+function buildImageMessages(
   imageBase64: string,
-  jobDescription: string
+  jobDescription: string,
+  userContext?: string
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  let systemContent = `你是一个专业的算法面试助手。用户截取了一道编程题，请：
-1. 简要分析题意和解题思路（2-3句话）
-2. 给出完整的解题代码（选择最优解）
-3. 简要说明时间/空间复杂度
+  let systemContent = `你是一个专业的面试助手。用户截取了一张图片（可能是面试题目、技术文档、系统设计图等），请根据图片内容智能判断题目类型并给出最佳回答：
 
-代码用 markdown 代码块包裹，注明语言。默认使用 Python，除非题目指定语言。`
+- **编程/算法题**：分析题意 → 给出最优解代码（默认Python，除非指定） → 说明时间/空间复杂度
+- **系统设计题**：列出核心要点 → 给出架构方案 → 说明权衡取舍
+- **技术概念题**：简洁准确地解释概念 → 给出关键要点和示例
+- **行为面试题**：提供STAR框架的回答思路 → 给出参考话术
+- **其他类型**：根据内容给出最有帮助的回答
+
+回答要求：
+- 抓住重点，不要过于冗长
+- 代码用 markdown 代码块包裹，注明语言
+- 多点并列时用数字列表
+- 回答控制在合理长度`
 
   if (jobDescription.trim()) {
     systemContent += `\n\n【应聘岗位描述】\n${jobDescription.trim()}`
   }
 
+  const contentArray: OpenAI.Chat.ChatCompletionContentPart[] = [
+    {
+      type: 'image_url',
+      image_url: { url: `data:image/png;base64,${imageBase64}` }
+    }
+  ]
+
+  if (userContext?.trim()) {
+    contentArray.push({
+      type: 'text',
+      text: `用户补充说明：${userContext.trim()}\n\n请结合图片内容和以上说明进行回答。`
+    })
+  } else {
+    contentArray.push({ type: 'text', text: '请分析图片中的面试题目并给出回答。' })
+  }
+
   return [
     { role: 'system', content: systemContent },
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'image_url',
-          image_url: { url: `data:image/png;base64,${imageBase64}`, detail: 'high' }
-        },
-        { type: 'text', text: '请分析这道编程题并给出解答。' }
-      ]
-    }
+    { role: 'user', content: contentArray }
   ]
 }
 

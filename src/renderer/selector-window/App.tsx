@@ -64,7 +64,7 @@ export function App() {
             color: '#94a3b8'
           }}
         >
-          拖拽选择题目区域 · Esc 取消
+          拖拽选择区域 · Esc 取消
         </div>
       )}
 
