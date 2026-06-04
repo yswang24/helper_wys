@@ -1,8 +1,4 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, session, desktopCapturer, screen, clipboard, Tray, Menu, nativeImage } from 'electron'
-
-declare module 'electron' {
-  interface App { isQuitting: boolean }
-}
 import { join } from 'path'
 import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
@@ -45,14 +41,10 @@ function createMainWindow(): void {
   // Invisible to screen capture as well (safety net)
   mainWindow.setContentProtection(true)
 
-  // 点 X 关闭按钮 → 隐藏主窗口 + 悬浮窗到托盘，不退出
-  mainWindow.on('close', (e) => {
-    if (!app.isQuitting) {
-      e.preventDefault()
-      overlayUserVisible = false
-      mainWindow?.hide()
-      overlayWindow?.hide()
-    }
+  // 点 X 关闭按钮 → 完全退出应用
+  mainWindow.on('close', () => {
+    overlayWindow?.close()
+    app.quit()
   })
 
   mainWindow.on('closed', () => {
@@ -206,16 +198,7 @@ app.whenReady().then(() => {
   tray.setToolTip('Interview Assistant')
 
   const updateTrayMenu = () => {
-    const visible = mainWindow?.isVisible() ?? false
     const menu = Menu.buildFromTemplate([
-      {
-        label: visible ? '隐藏设置窗口' : '显示设置窗口',
-        click: () => {
-          if (mainWindow?.isVisible()) mainWindow.hide()
-          else { mainWindow?.show(); mainWindow?.focus() }
-          updateTrayMenu()
-        }
-      },
       {
         label: overlayWindow?.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
         click: () => {
@@ -227,8 +210,7 @@ app.whenReady().then(() => {
       {
         label: '退出',
         click: () => {
-          app.isQuitting = true
-          app.quit()
+          mainWindow?.close()
         }
       }
     ])
@@ -237,9 +219,8 @@ app.whenReady().then(() => {
   updateTrayMenu()
 
   tray.on('click', () => {
-    if (mainWindow?.isVisible()) mainWindow.hide()
-    else { mainWindow?.show(); mainWindow?.focus() }
-    updateTrayMenu()
+    mainWindow?.show()
+    mainWindow?.focus()
   })
 
   // Restore saved overlay position
@@ -264,12 +245,6 @@ app.whenReady().then(() => {
     if (!overlayWindow) return
     if (overlayWindow.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
     else { overlayUserVisible = true; overlayWindow.show() }
-  })
-
-  // Ctrl+Shift+M — 显示/隐藏设置主窗口
-  globalShortcut.register('CommandOrControl+Shift+M', () => {
-    if (mainWindow?.isVisible()) mainWindow.hide()
-    else { mainWindow?.show(); mainWindow?.focus() }
   })
 
   // Ctrl+Shift+X — clear answer (changed from C which conflicts with B站)
@@ -316,7 +291,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
 })
 
 app.on('will-quit', () => {
