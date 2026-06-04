@@ -33,11 +33,11 @@ export function App() {
     setRect({ x, y, w, h })
   }
 
-  const onMouseUp = async () => {
+  const onMouseUp = () => {
     if (!start || !rect || rect.w < 10 || rect.h < 10 || capturing) return
     setCapturing(true)
-    await window.electronAPI.submitScreenshot(rect)
-    // Window will be closed by main process after capture
+    window.electronAPI.submitScreenshot(rect)
+    // Window is closed by main process after capture — don't block here
   }
 
   const selectionVisible = rect && rect.w > 2 && rect.h > 2
@@ -64,7 +64,7 @@ export function App() {
             color: '#94a3b8'
           }}
         >
-          拖拽选择题目区域 · Esc 取消
+          拖拽选择区域 · Esc 取消
         </div>
       )}
 

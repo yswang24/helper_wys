@@ -575,7 +575,8 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
             { label: 'DeepSeek Chat', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', visionModel: 'deepseek-chat' },
             { label: 'DeepSeek Coder', baseUrl: 'https://api.deepseek.com', model: 'deepseek-coder', visionModel: 'deepseek-chat' },
             { label: 'Qwen Plus', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', visionModel: 'qwen-vl-plus' },
-            { label: 'GPT-4o', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', visionModel: 'gpt-4o' }
+            { label: 'GPT-4o', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', visionModel: 'gpt-4o' },
+            { label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', visionModel: 'Qwen/Qwen2-VL-7B-Instruct' }
           ].map((p) => (
             <button
               key={p.label}

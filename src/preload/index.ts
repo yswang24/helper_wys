@@ -17,7 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('config:set', partial),
 
   // ── LLM ─────────────────────────────────────────────────────────────────────
-  askQuestion: (question: string) => ipcRenderer.send('llm:ask', question),
+  askQuestion: (question: string, history?: { question: string; answer: string }[]) =>
+    ipcRenderer.send('llm:ask', question, history ?? []),
   clearAnswer: () => ipcRenderer.send('llm:clear'),
   stopAnswer: () => ipcRenderer.send('llm:stop'),
 
@@ -114,5 +115,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── Screenshot / coding mode ─────────────────────────────────────────────────
   submitScreenshot: (region: { x: number; y: number; w: number; h: number }) =>
     ipcRenderer.send('screenshot:submit', region),
-  cancelScreenshot: () => ipcRenderer.send('screenshot:cancel')
+  cancelScreenshot: () => ipcRenderer.send('screenshot:cancel'),
+
+  // ── Image re-ask with context ───────────────────────────────────────────────
+  reaskImageWithContext: (context: string) =>
+    ipcRenderer.send('llm:reask-image', context),
+
+  // ── Image text extraction ───────────────────────────────────────────────────
+  onImageText: (cb: (text: string) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, text: string) => cb(text)
+    ipcRenderer.on('image:text', handler)
+    return () => ipcRenderer.removeListener('image:text', handler)
+  },
+  onImageStatus: (cb: (status: string) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, status: string) => cb(status)
+    ipcRenderer.on('image:status', handler)
+    return () => ipcRenderer.removeListener('image:status', handler)
+  },
+  onImageError: (cb: (msg: string) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, msg: string) => cb(msg)
+    ipcRenderer.on('image:error', handler)
+    return () => ipcRenderer.removeListener('image:error', handler)
+  },
+  askExtractedText: (text: string, history?: { question: string; answer: string }[]) =>
+    ipcRenderer.send('llm:ask-extracted', text, history ?? [])
 })

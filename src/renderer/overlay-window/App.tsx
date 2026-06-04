@@ -30,13 +30,39 @@ export function App() {
   const [inputText, setInputText] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  // Keep a ref to latest history so callbacks don't need it as dependency
+  const historyRef = useRef(history)
+  historyRef.current = history
+
+  const getRecentHistory = useCallback(() => {
+    return historyRef.current
+      .filter(h => h.status === 'done' && h.answer)
+      .slice(-5)
+      .map(h => ({ question: h.question, answer: h.answer }))
+  }, [])
+
+  // Image text extraction
+  const [extractedText, setExtractedText] = useState('')
+  const [showExtracted, setShowExtracted] = useState(false)
+  const [extractStatus, setExtractStatus] = useState<'idle' | 'extracting' | 'done' | 'error'>('idle')
+  const [extractError, setExtractError] = useState('')
+  const extractedRef = useRef<HTMLTextAreaElement>(null)
+
   const submitManual = useCallback(() => {
     const q = inputText.trim()
     if (!q) return
-    window.electronAPI.askQuestion(q)
+    window.electronAPI.askQuestion(q, getRecentHistory())
     setInputText('')
     setShowInput(false)
-  }, [inputText])
+  }, [inputText, getRecentHistory])
+
+  const submitExtracted = useCallback(() => {
+    const t = extractedText.trim()
+    if (!t) return
+    window.electronAPI.askExtractedText(t, getRecentHistory())
+    setShowExtracted(false)
+    setExtractedText('')
+  }, [extractedText, getRecentHistory])
 
   // ── Appearance: opacity ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -45,6 +71,39 @@ export function App() {
     })
     const un = window.electronAPI.onOverlayOpacity((opacity) => setBgOpacity(opacity))
     return un
+  }, [])
+
+  // ── Focus management: only allow focus on input elements ──
+  useEffect(() => {
+    let inputClicked = false
+
+    // Detect click on input BEFORE focus fires
+    const onMouseDown = (e: MouseEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        inputClicked = true
+      }
+    }
+
+    // Block any focus that wasn't from a direct input click
+    const onFocusIn = (e: FocusEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        if (!inputClicked) {
+          ;(e.target as HTMLElement).blur()
+        }
+      } else {
+        ;(e.target as HTMLElement).blur?.()
+      }
+      inputClicked = false
+    }
+
+    document.addEventListener('mousedown', onMouseDown, true)
+    document.addEventListener('focusin', onFocusIn)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown, true)
+      document.removeEventListener('focusin', onFocusIn)
+    }
   }, [])
 
   // ── Receive transcripts from main window (via main process) ─────────────────
@@ -97,6 +156,27 @@ export function App() {
     return () => { unStart(); unChunk(); unDone(); unError(); unClear() }
   }, [])
 
+  // ── Image text extraction ───────────────────────────────────────────────────
+  useEffect(() => {
+    const unStatus = window.electronAPI.onImageStatus((status) => {
+      if (status === 'extracting') {
+        setExtractedText('')
+        setShowExtracted(false)
+        setExtractStatus('extracting')
+      }
+    })
+    const unText = window.electronAPI.onImageText((text) => {
+      setExtractedText(text)
+      setShowExtracted(true)
+      setExtractStatus('done')
+    })
+    const unError = window.electronAPI.onImageError((msg) => {
+      setExtractStatus('error')
+      setExtractError(msg)
+    })
+    return () => { unStatus(); unText(); unError() }
+  }, [])
+
   // Auto-scroll to latest answer
   const lastAnswer = history.length > 0 ? history[history.length - 1].answer : ''
   useEffect(() => {
@@ -108,7 +188,7 @@ export function App() {
   const allTranscript = finalLines.join(' ')
 
   return (
-    <div className="h-screen w-screen overflow-hidden select-none" style={{ pointerEvents: 'none' } as React.CSSProperties}>
+    <div className="h-screen w-screen overflow-hidden" style={{ pointerEvents: 'none' } as React.CSSProperties}>
       <div
         ref={panelRef}
         className="flex flex-col rounded-xl overflow-hidden shadow-2xl h-full w-full"
@@ -304,6 +384,95 @@ export function App() {
           ))}
           <div ref={answerEndRef} />
         </div>
+
+        {/* Image extraction: loading / error / editor */}
+        {extractStatus === 'extracting' && (
+          <div
+            className="px-3 py-3 border-t flex-shrink-0 flex items-center gap-2"
+            style={{ borderColor: 'rgba(52,211,153,0.3)', background: 'rgba(10,25,20,0.8)' }}
+          >
+            <span className="animate-pulse text-xs" style={{ color: '#34d399' }}>●</span>
+            <span className="text-xs" style={{ color: '#34d399' }}>正在识别图片文字...</span>
+          </div>
+        )}
+        {extractStatus === 'error' && (
+          <div
+            className="px-3 py-2 border-t flex-shrink-0"
+            style={{ borderColor: 'rgba(220,38,38,0.3)', background: 'rgba(30,10,10,0.8)' }}
+          >
+            <div className="text-xs mb-1" style={{ color: '#f87171' }}>
+              ⚠ {extractError}
+            </div>
+            <button
+              onClick={() => { setExtractStatus('idle'); setExtractError('') }}
+              className="text-xs px-2 py-0.5 rounded"
+              style={{ background: 'rgba(30,30,60,0.5)', color: '#475569', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
+            >
+              关闭
+            </button>
+          </div>
+        )}
+        {showExtracted && extractStatus === 'done' && (
+          <div
+            className="px-3 py-2 border-t flex-shrink-0"
+            style={{ borderColor: 'rgba(52,211,153,0.3)', background: 'rgba(10,25,20,0.8)' }}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium" style={{ color: '#34d399' }}>
+                图片识别结果（可编辑）
+              </span>
+              <button
+                onClick={() => { setShowExtracted(false); setExtractedText(''); setExtractStatus('idle') }}
+                className="text-xs px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(30,30,60,0.6)', color: '#334155', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
+              >
+                关闭
+              </button>
+            </div>
+            <textarea
+              ref={extractedRef}
+              value={extractedText}
+              onChange={(e) => setExtractedText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitExtracted() }
+              }}
+              rows={5}
+              spellCheck={false}
+              className="w-full text-xs rounded px-2 py-1.5 resize-y outline-none"
+              style={{
+                background: 'rgba(15,25,20,0.8)',
+                border: '1px solid rgba(52,211,153,0.3)',
+                color: '#e2e8f0',
+                fontFamily: 'inherit',
+                lineHeight: '1.6',
+                minHeight: 60,
+                maxHeight: 200
+              }}
+            />
+            <div className="flex justify-end gap-2 mt-1.5">
+              <button
+                onClick={() => { setShowExtracted(false); setExtractedText(''); setExtractStatus('idle') }}
+                className="px-2 py-0.5 text-xs rounded"
+                style={{ background: 'rgba(30,30,60,0.5)', color: '#475569', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={submitExtracted}
+                disabled={!extractedText.trim()}
+                className="px-3 py-0.5 text-xs rounded font-medium"
+                style={{
+                  background: extractedText.trim() ? 'rgba(16,185,129,0.3)' : 'rgba(30,30,60,0.5)',
+                  color: extractedText.trim() ? '#34d399' : '#334155',
+                  border: `1px solid ${extractedText.trim() ? 'rgba(52,211,153,0.4)' : 'rgba(50,50,80,0.4)'}`,
+                  cursor: extractedText.trim() ? 'pointer' : 'default'
+                }}
+              >
+                发送到AI (Ctrl+Enter)
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Status / action bar */}
         {history.length > 0 && (() => {

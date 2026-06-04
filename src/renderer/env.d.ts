@@ -36,7 +36,7 @@ interface ElectronAPI {
   getConfig: () => Promise<LLMConfig>
   setConfig: (partial: Partial<LLMConfig>) => void
   // LLM
-  askQuestion: (question: string) => void
+  askQuestion: (question: string, history?: { question: string; answer: string }[]) => void
   clearAnswer: () => void
   stopAnswer: () => void
   onAnswerStart: (cb: (question: string) => void) => UnlistenFn
@@ -66,6 +66,13 @@ interface ElectronAPI {
   // Screenshot / coding mode
   submitScreenshot: (region: { x: number; y: number; w: number; h: number }) => void
   cancelScreenshot: () => void
+  // Image re-ask with context
+  reaskImageWithContext: (context: string) => void
+  // Image text extraction
+  onImageText: (cb: (text: string) => void) => UnlistenFn
+  onImageStatus: (cb: (status: string) => void) => UnlistenFn
+  onImageError: (cb: (msg: string) => void) => UnlistenFn
+  askExtractedText: (text: string, history?: { question: string; answer: string }[]) => void
 }
 
 declare global {
