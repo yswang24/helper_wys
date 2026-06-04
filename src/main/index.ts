@@ -8,7 +8,7 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig } from './llm'
+import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, type HistoryRound } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
@@ -73,6 +73,7 @@ function createOverlayWindow(): void {
     resizable: true,
     hasShadow: false,
     type: 'panel',
+    // focusable must be true so inputs can receive keyboard events
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -391,9 +392,9 @@ function waitForStreamEnd(callback: () => void): void {
   tick()
 }
 
-ipcMain.on('llm:ask', (_e, question: string) => {
+ipcMain.on('llm:ask', (_e, question: string, history: HistoryRound[] = []) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(question, overlayWindow!)
+  const start = () => streamAnswer(question, overlayWindow!, history)
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -426,9 +427,9 @@ ipcMain.on('llm:reask-image', (_e, userContext: string) => {
 })
 
 // Overlay sends extracted text → LLM answers
-ipcMain.on('llm:ask-extracted', (_e, text: string) => {
+ipcMain.on('llm:ask-extracted', (_e, text: string, history: HistoryRound[] = []) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(text, overlayWindow!)
+  const start = () => streamAnswer(text, overlayWindow!, history)
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)

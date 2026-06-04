@@ -30,6 +30,17 @@ export function App() {
   const [inputText, setInputText] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  // Keep a ref to latest history so callbacks don't need it as dependency
+  const historyRef = useRef(history)
+  historyRef.current = history
+
+  const getRecentHistory = useCallback(() => {
+    return historyRef.current
+      .filter(h => h.status === 'done' && h.answer)
+      .slice(-5)
+      .map(h => ({ question: h.question, answer: h.answer }))
+  }, [])
+
   // Image text extraction
   const [extractedText, setExtractedText] = useState('')
   const [showExtracted, setShowExtracted] = useState(false)
@@ -40,18 +51,18 @@ export function App() {
   const submitManual = useCallback(() => {
     const q = inputText.trim()
     if (!q) return
-    window.electronAPI.askQuestion(q)
+    window.electronAPI.askQuestion(q, getRecentHistory())
     setInputText('')
     setShowInput(false)
-  }, [inputText])
+  }, [inputText, getRecentHistory])
 
   const submitExtracted = useCallback(() => {
     const t = extractedText.trim()
     if (!t) return
-    window.electronAPI.askExtractedText(t)
+    window.electronAPI.askExtractedText(t, getRecentHistory())
     setShowExtracted(false)
     setExtractedText('')
-  }, [extractedText])
+  }, [extractedText, getRecentHistory])
 
   // ── Appearance: opacity ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -60,6 +71,39 @@ export function App() {
     })
     const un = window.electronAPI.onOverlayOpacity((opacity) => setBgOpacity(opacity))
     return un
+  }, [])
+
+  // ── Focus management: only allow focus on input elements ──
+  useEffect(() => {
+    let inputClicked = false
+
+    // Detect click on input BEFORE focus fires
+    const onMouseDown = (e: MouseEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        inputClicked = true
+      }
+    }
+
+    // Block any focus that wasn't from a direct input click
+    const onFocusIn = (e: FocusEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        if (!inputClicked) {
+          ;(e.target as HTMLElement).blur()
+        }
+      } else {
+        ;(e.target as HTMLElement).blur?.()
+      }
+      inputClicked = false
+    }
+
+    document.addEventListener('mousedown', onMouseDown, true)
+    document.addEventListener('focusin', onFocusIn)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown, true)
+      document.removeEventListener('focusin', onFocusIn)
+    }
   }, [])
 
   // ── Receive transcripts from main window (via main process) ─────────────────

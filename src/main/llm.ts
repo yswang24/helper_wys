@@ -45,9 +45,15 @@ export function isCurrentlyStreaming(): boolean {
   return isStreaming
 }
 
+export interface HistoryRound {
+  question: string
+  answer: string
+}
+
 export async function streamAnswer(
   question: string,
-  overlayWindow: BrowserWindow
+  overlayWindow: BrowserWindow,
+  history: HistoryRound[] = []
 ): Promise<void> {
   if (!currentConfig.apiKey) {
     overlayWindow.webContents.send('llm:error', '请先在设置中填写 API Key')
@@ -74,7 +80,7 @@ export async function streamAnswer(
     const stream = await client.chat.completions.create(
       {
         model: currentConfig.model,
-        messages: buildMessages(question, currentConfig.jobDescription),
+        messages: buildMessages(question, currentConfig.jobDescription, history),
         stream: true,
         max_tokens: 2000,
         temperature: 0.7
@@ -278,7 +284,8 @@ function buildImageMessages(
 
 function buildMessages(
   question: string,
-  jobDescription: string
+  jobDescription: string,
+  history: HistoryRound[] = []
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   let systemContent = `你是一个专业的技术面试助手。请用简洁、准确的中文回答面试问题。
 
@@ -292,8 +299,15 @@ function buildMessages(
     systemContent += `\n\n【应聘岗位描述】\n${jobDescription.trim()}`
   }
 
-  return [
-    { role: 'system', content: systemContent },
-    { role: 'user', content: question }
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: 'system', content: systemContent }
   ]
+
+  for (const round of history) {
+    messages.push({ role: 'user', content: round.question })
+    messages.push({ role: 'assistant', content: round.answer })
+  }
+
+  messages.push({ role: 'user', content: question })
+  return messages
 }

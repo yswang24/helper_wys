@@ -17,7 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('config:set', partial),
 
   // ── LLM ─────────────────────────────────────────────────────────────────────
-  askQuestion: (question: string) => ipcRenderer.send('llm:ask', question),
+  askQuestion: (question: string, history?: { question: string; answer: string }[]) =>
+    ipcRenderer.send('llm:ask', question, history ?? []),
   clearAnswer: () => ipcRenderer.send('llm:clear'),
   stopAnswer: () => ipcRenderer.send('llm:stop'),
 
@@ -136,5 +137,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('image:error', handler)
     return () => ipcRenderer.removeListener('image:error', handler)
   },
-  askExtractedText: (text: string) => ipcRenderer.send('llm:ask-extracted', text)
+  askExtractedText: (text: string, history?: { question: string; answer: string }[]) =>
+    ipcRenderer.send('llm:ask-extracted', text, history ?? [])
 })
