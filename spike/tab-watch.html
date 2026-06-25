@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>Tab Watch · 假面试 Tab</title>
+  <style>
+    body { font: 15px -apple-system, BlinkMacSystemFont, sans-serif; padding: 28px; background: #0b1020; color: #dfe7ff; }
+    h2 { margin: 0 0 6px; }
+    p { color: #9fb0d8; line-height: 1.6; }
+    code { background: #182040; padding: 1px 6px; border-radius: 4px; }
+    #log { background: #070a16; padding: 14px; border-radius: 10px; max-height: 52vh; overflow: auto;
+           font: 12px ui-monospace, Menlo, monospace; line-height: 1.6; white-space: pre-wrap; margin-top: 14px; }
+    .bad { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h2>假装这是面试判题页（HackerRank / Coderpad / 牛客…）</h2>
+  <p>
+    在<strong>真实浏览器（Chrome，跟面试同环境）</strong>里打开本页，按 <code>⌘⌥J</code> 开 console。<br>
+    然后去操作那个 Electron 浮层（点 / 拖 / 打字 / 点按钮）。<br>
+    下面会记录<strong>本页面（= 面试 Tab）</strong>收到的 <code>blur</code> / <code>focus</code> / <code>visibilitychange</code>。
+  </p>
+  <p>判定标准：操作浮层时，只要这里出现 <span class="bad">❌ BLUR</span> 或 <span class="bad">❌ hidden</span>，
+     就说明切屏检测会被触发 —— 该配置不过关。</p>
+  <pre id="log"></pre>
+  <script>
+    var p = document.getElementById('log');
+    function log(msg, bad) {
+      var line = new Date().toLocaleTimeString() + '  ' + msg;
+      p.textContent = line + '\n' + p.textContent;
+      console[bad ? 'warn' : 'log']('%c' + line, bad ? 'color:#f87171;font-weight:700' : 'color:#9bd1ff');
+    }
+    addEventListener('blur',  function () { log('❌ window BLUR  ← 切屏检测抓的就是这个', true); });
+    addEventListener('focus', function () { log('✅ window focus'); });
+    document.addEventListener('visibilitychange', function () {
+      var hidden = document.visibilityState === 'hidden';
+      log((hidden ? '❌ ' : '') + 'visibilitychange = ' + document.visibilityState, hidden);
+    });
+    log('watching… 现在去点 / 拖 / 在浮层里打字，观察上面有没有 ❌');
+  </script>
+</body>
+</html>
