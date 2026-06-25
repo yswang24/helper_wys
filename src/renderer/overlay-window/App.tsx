@@ -30,17 +30,6 @@ export function App() {
   const [inputText, setInputText] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // Keep a ref to latest history so callbacks don't need it as dependency
-  const historyRef = useRef(history)
-  historyRef.current = history
-
-  const getRecentHistory = useCallback(() => {
-    return historyRef.current
-      .filter(h => h.status === 'done' && h.answer)
-      .slice(-5)
-      .map(h => ({ question: h.question, answer: h.answer }))
-  }, [])
-
   // Image text extraction
   const [extractedText, setExtractedText] = useState('')
   const [showExtracted, setShowExtracted] = useState(false)
@@ -51,18 +40,18 @@ export function App() {
   const submitManual = useCallback(() => {
     const q = inputText.trim()
     if (!q) return
-    window.electronAPI.askQuestion(q, getRecentHistory())
+    window.electronAPI.askQuestion(q)
     setInputText('')
     setShowInput(false)
-  }, [inputText, getRecentHistory])
+  }, [inputText])
 
   const submitExtracted = useCallback(() => {
     const t = extractedText.trim()
     if (!t) return
-    window.electronAPI.askExtractedText(t, getRecentHistory())
+    window.electronAPI.askExtractedText(t)
     setShowExtracted(false)
     setExtractedText('')
-  }, [extractedText, getRecentHistory])
+  }, [extractedText])
 
   // ── Appearance: opacity ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -210,7 +199,7 @@ export function App() {
         >
           <StatusDot llm={history.length > 0 ? history[history.length - 1].status : 'idle'} listening={listening} />
           <span className="text-xs font-medium" style={{ color: '#94a3b8' }}>
-            Interview Assistant
+            Helper
           </span>
           {listening && (
             <span className="text-xs animate-pulse" style={{ color: '#a78bfa' }}>
@@ -233,7 +222,7 @@ export function App() {
             </button>
             {history.length > 0 && (
               <button
-                onClick={() => setHistory([])}
+                onClick={() => window.electronAPI.clearAnswer()}
                 className="text-xs px-2 py-0.5 rounded transition-colors"
                 style={{
                   background: 'transparent',
@@ -436,7 +425,7 @@ export function App() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitExtracted() }
               }}
-              rows={5}
+              rows={10}
               spellCheck={false}
               className="w-full text-xs rounded px-2 py-1.5 resize-y outline-none"
               style={{
@@ -445,8 +434,8 @@ export function App() {
                 color: '#e2e8f0',
                 fontFamily: 'inherit',
                 lineHeight: '1.6',
-                minHeight: 60,
-                maxHeight: 200
+                minHeight: 80,
+                maxHeight: '46vh'
               }}
             />
             <div className="flex justify-end gap-2 mt-1.5">
@@ -575,8 +564,9 @@ function AnswerText({ text, streaming }: { text: string; streaming: boolean }) {
         return (
           <div
             key={i}
-            style={{ color: '#cbd5e1', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-            dangerouslySetInnerHTML={{ __html: renderInline(seg.content) }}
+            className="space-y-1"
+            style={{ color: '#cbd5e1', wordBreak: 'break-word' }}
+            dangerouslySetInnerHTML={{ __html: renderMarkdownBlock(seg.content) }}
           />
         )
       })}
@@ -608,9 +598,53 @@ function parseSegments(text: string, streaming: boolean): Segment[] {
   return segs
 }
 
-function renderInline(text: string): string {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#e2e8f0">$1</strong>')
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// Inline formatting on an ALREADY-ESCAPED string: bold, inline code, links (rendered
+// as non-navigating styled text so they can't hijack the overlay window).
+function renderInline(escaped: string): string {
+  return escaped
+    .replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#e2e8f0">$1</strong>')
     .replace(/`([^`]+)`/g, '<code style="background:rgba(30,30,60,0.6);padding:1px 4px;border-radius:3px;color:#7dd3fc;font-size:0.85em">$1</code>')
+    .replace(/\[([^\]]+)\]\(https?:\/\/[^\s)]+\)/g, '<span style="color:#7dd3fc;text-decoration:underline">$1</span>')
+}
+
+// Block-level markdown → HTML for a text segment (code fences handled separately by
+// parseSegments). Escapes first, then recognizes headings / lists / blockquotes per line.
+function renderMarkdownBlock(text: string): string {
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (!t) { out.push('<div style="height:2px"></div>'); continue }
+
+    const heading = t.match(/^(#{1,3})\s+(.*)$/)
+    if (heading) {
+      const size = heading[1].length === 1 ? '1.05em' : heading[1].length === 2 ? '1em' : '0.95em'
+      out.push(`<div style="font-weight:700;color:#e2e8f0;font-size:${size}">${renderInline(escapeHtml(heading[2]))}</div>`)
+      continue
+    }
+
+    const ordered = t.match(/^(\d+)\.\s+(.*)$/)
+    if (ordered) {
+      out.push(`<div style="display:flex;gap:6px"><span style="color:#7dd3fc;flex-shrink:0">${ordered[1]}.</span><span>${renderInline(escapeHtml(ordered[2]))}</span></div>`)
+      continue
+    }
+
+    const bullet = t.match(/^[-*]\s+(.*)$/)
+    if (bullet) {
+      out.push(`<div style="display:flex;gap:6px"><span style="color:#7dd3fc;flex-shrink:0">•</span><span>${renderInline(escapeHtml(bullet[1]))}</span></div>`)
+      continue
+    }
+
+    const quote = t.match(/^>\s?(.*)$/)
+    if (quote) {
+      out.push(`<div style="border-left:2px solid rgba(125,211,252,0.4);padding-left:8px;color:#94a3b8">${renderInline(escapeHtml(quote[1]))}</div>`)
+      continue
+    }
+
+    out.push(`<div>${renderInline(escapeHtml(line))}</div>`)
+  }
+  return out.join('')
 }
