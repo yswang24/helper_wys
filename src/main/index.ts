@@ -15,6 +15,7 @@ let selectorDisplayId: number | null = null  // which display the active selecto
 let tray: Tray | null = null
 let overlayUserVisible = true  // tracks whether user wants overlay visible
 let isQuitting = false  // distinguishes "hide main window" from a real app quit
+let isCapturing = false // true while the screenshot selector is up — suppresses activate→restore
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null  // overlay mouse/restore heartbeat
 const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
 
@@ -141,6 +142,7 @@ function createOverlayWindow(): void {
 }
 
 function createSelectorWindow(): void {
+  isCapturing = true  // belt-and-suspenders: also suppress app.on('activate')
   // Cover the display the cursor is on, not always the primary — otherwise a second monitor
   // can never be selected. Use its real origin (x/y), not 0,0, so it lands on that screen.
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
@@ -158,6 +160,13 @@ function createSelectorWindow(): void {
     skipTaskbar: true,
     resizable: false,
     movable: false,
+    // Non-activating: float over the exam and take mouse drags WITHOUT switching the foreground
+    // app away from the browser — activating our app is what the exam detects as 切屏/blur.
+    // Trade-off: a non-focusable window gets no keyboard, so Esc/Enter inside the selector don't
+    // fire; ⌘⌥S again cancels it (global shortcut, works regardless of focus).
+    type: 'panel',
+    focusable: false,
+    show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -188,13 +197,25 @@ function createSelectorWindow(): void {
     selectorWindow.loadFile(join(__dirname, '../renderer/selector-window/index.html'))
   }
 
+  // Show WITHOUT activating our app — the exam/browser stays the foreground app (no 切屏)
+  selectorWindow.showInactive()
+
   selectorWindow.on('closed', () => {
     selectorWindow = null
     selectorDisplayId = null
+    // Re-assert the Dock icon — closing the transient panel can drop it (see whenReady note)
+    if (process.platform === 'darwin') void app.dock?.show()
+    // Defer: a re-activation fired as the selector closes must not trigger restoreMainWindow
+    setTimeout(() => { isCapturing = false }, 300)
   })
 }
 
 app.whenReady().then(() => {
+  // Keep this a regular (Dock-showing) app. Screenshot window churn (a transient panel created
+  // while the main window is hidden) can otherwise leave macOS treating it as an agent and drop
+  // the Dock icon. Asserting the policy up front + re-asserting after capture keeps it stable.
+  if (process.platform === 'darwin') app.setActivationPolicy('regular')
+
   // Restore user settings from disk
   const saved = loadPersistedConfig()
   if (Object.keys(saved).length) setConfig(saved)
@@ -378,6 +399,7 @@ app.on('before-quit', () => {
 // macOS：点击程序坞图标会触发 'activate'。主窗口被 X 关闭后只是隐藏（见 close 处理器），
 // 没有这个监听，点 Dock 图标毫无反应。这里把隐藏/已销毁的主窗口重新唤回。
 app.on('activate', () => {
+  if (isCapturing) return // a screenshot is in progress — don't pull the main window to the front
   restoreMainWindow()
 })
 
@@ -543,9 +565,6 @@ ipcMain.on('clipboard:copy', (_e, text: string) => {
 })
 
 // ── IPC: screenshot / coding mode ────────────────────────────────────────────
-ipcMain.on('screenshot:cancel', () => {
-  selectorWindow?.close()
-})
 
 ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) => {
   // Close the selector FIRST — otherwise its "截图中..." can stay stuck if anything below fails

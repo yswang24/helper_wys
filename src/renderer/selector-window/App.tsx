@@ -51,27 +51,25 @@ export function App() {
       if (r.w < MIN_SIZE || r.h < MIN_SIZE) { rectRef.current = null; setRect(null); return } // too small — retry
       submit(r)
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') window.electronAPI.cancelScreenshot()
-      else if (e.key === 'Enter') submit({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight })
-    }
+    // No keydown handler: the selector is a non-focusable panel (so it never steals foreground
+    // from the exam), which means it can't receive keyboard. Cancel with ⌘⌥S again.
     window.addEventListener('mousedown', onDown)
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-    window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
-      window.removeEventListener('keydown', onKey)
     }
   }, [])
 
   const selecting = !!rect && rect.w >= MIN_SIZE && rect.h >= MIN_SIZE
   const DIM = 'rgba(0, 0, 0, 0.22)'
 
+  // Keep the normal arrow cursor — a crosshair/wait cursor would tip off the screen-share
+  // viewer that a capture tool is active (the cursor itself isn't hidden by content protection).
   return (
-    <div className="fixed inset-0" style={{ cursor: capturing ? 'wait' : 'crosshair' }}>
+    <div className="fixed inset-0" style={{ cursor: 'default' }}>
       {/* Before selecting: dim the whole screen (still see-through so you can find the target) */}
       {!selecting && <div className="fixed inset-0" style={{ background: DIM }} />}
 
@@ -81,7 +79,7 @@ export function App() {
           className="absolute left-1/2 top-8 -translate-x-1/2 px-4 py-2 rounded-lg text-sm font-medium pointer-events-none"
           style={{ background: 'rgba(15, 15, 30, 0.9)', border: '1px solid rgba(100, 100, 180, 0.5)', color: '#cbd5e1' }}
         >
-          拖拽选择区域 · Enter 截全屏 · Esc 取消
+          拖拽选择区域 · 再按 ⌘⌥S 取消
         </div>
       )}
 

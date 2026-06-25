@@ -107,7 +107,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── Screenshot / coding mode ─────────────────────────────────────────────────
   submitScreenshot: (region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) =>
     ipcRenderer.send('screenshot:submit', region),
-  cancelScreenshot: () => ipcRenderer.send('screenshot:cancel'),
 
   // ── Image text extraction ───────────────────────────────────────────────────
   onImageText: (cb: (text: string) => void): UnlistenFn => {
