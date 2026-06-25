@@ -1,7 +1,7 @@
 /** @type {import('@electron/packager').Options} */
 module.exports = {
   dir: '.',
-  name: 'Interview Assistant',
+  name: 'Helper',
   platform: 'win32',
   arch: 'x64',
   out: 'dist',
