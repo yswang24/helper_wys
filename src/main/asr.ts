@@ -53,21 +53,29 @@ export async function transcribeAudio(
   try {
     // Whisper accepts ISO 639-1 2-letter codes only (zh not zh-CN, en not en-US)
     const lang = language?.split('-')[0]
+    // The dialogue prompt + temperature:0 are Whisper-specific tuning. Other backends
+    // (SenseVoice etc.) may reject the param or leak the canned phrasing, and the prompt is
+    // language-keyed so a non-zh/en clip isn't anchored toward the wrong language's wording.
+    const isWhisper = /whisper/i.test(config.model)
+    const promptByLang: Record<string, string> = {
+      zh: '面试官：请解释一下这个技术问题。候选人：好的，我来说明。',
+      en: 'Interviewer: Can you explain this concept? Candidate: Sure, let me explain.'
+    }
+    const prompt = promptByLang[lang ?? 'en']
     const result = await client.audio.transcriptions.create({
       file: createReadStream(tmpFile) as unknown as File,
       model: config.model,
       ...(lang ? { language: lang } : {}),
-      // Dialogue-style prompt anchors Whisper to the domain, cuts hallucinations on silence
-      prompt: lang === 'zh'
-        ? '面试官：请解释一下这个技术问题。候选人：好的，我来说明。'
-        : 'Interviewer: Can you explain this concept? Candidate: Sure, let me explain.',
-      temperature: 0
+      ...(isWhisper ? { temperature: 0, ...(prompt ? { prompt } : {}) } : {})
     })
     const text = result.text.trim()
     // Diagnostic: tiny output from a sizable audio buffer means the audio was silent
     // (routing/throttle) — not a Whisper failure. Logged so the two cases are distinguishable.
     console.log(`[ASR] audio ${audio.length}B → "${text.slice(0, 40)}" (${text.length} chars)`)
-    if (isHallucinatedText(text)) return ''
+    if (isHallucinatedText(text)) {
+      console.log('[ASR] discarded as hallucination/boilerplate (empty result returned)')
+      return ''
+    }
     return text
   } finally {
     try { unlinkSync(tmpFile) } catch { /* ignore */ }
