@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 
 interface Rect { x: number; y: number; w: number; h: number }
 
+// Single source of truth for "is this selection big enough" — used for BOTH drawing the box and
+// accepting it on release, so a tiny drag never renders a box that's then silently discarded.
+const MIN_SIZE = 8
+
 export function App() {
   const [rect, setRect] = useState<Rect | null>(null)
   const [capturing, setCapturing] = useState(false)
@@ -44,7 +48,7 @@ export function App() {
       const r = rectRef.current
       startRef.current = null
       if (!s || !r) return
-      if (r.w < 8 || r.h < 8) { rectRef.current = null; setRect(null); return } // too small — retry
+      if (r.w < MIN_SIZE || r.h < MIN_SIZE) { rectRef.current = null; setRect(null); return } // too small — retry
       submit(r)
     }
     const onKey = (e: KeyboardEvent) => {
@@ -63,7 +67,7 @@ export function App() {
     }
   }, [])
 
-  const selecting = !!rect && rect.w > 2 && rect.h > 2
+  const selecting = !!rect && rect.w >= MIN_SIZE && rect.h >= MIN_SIZE
   const DIM = 'rgba(0, 0, 0, 0.22)'
 
   return (

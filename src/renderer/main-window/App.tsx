@@ -120,6 +120,7 @@ function AskTab() {
   const [jd, setJd] = useState('')
   const [isSending, setIsSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const sendTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   // Sync JD to main process whenever it changes
   useEffect(() => {
@@ -129,14 +130,20 @@ function AskTab() {
     return () => clearTimeout(t)
   }, [jd])
 
+  // Clear the pending send-reset timer on unmount
+  useEffect(() => () => { if (sendTimerRef.current) clearTimeout(sendTimerRef.current) }, [])
+
   const submit = () => {
     const q = question.trim()
     if (!q || isSending) return
     setIsSending(true)
     window.electronAPI.askQuestion(q)
     setQuestion('')
-    // Reset sending state after a short delay (streaming start triggers it)
-    setTimeout(() => setIsSending(false), 1500)
+    // The answer streams to the OVERLAY window, which this window can't observe, so re-enable the
+    // button on a fixed fallback timer. Kept in a ref so it's cleared on unmount / re-submit —
+    // no stacked timers, no setState-after-unmount.
+    if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
+    sendTimerRef.current = setTimeout(() => setIsSending(false), 1500)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -247,10 +254,13 @@ function VoiceTab() {
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const listeningRef = useRef(false)
+  const transcribingRef = useRef(false)  // true while a stopped take is still being transcribed
   const langRef = useRef(lang)
   const deviceIdRef = useRef(deviceId)
+  const devicesRef = useRef(devices)
   useEffect(() => { langRef.current = lang }, [lang])
   useEffect(() => { deviceIdRef.current = deviceId; localStorage.setItem('asrDeviceId', deviceId) }, [deviceId])
+  useEffect(() => { devicesRef.current = devices }, [devices])
 
   // Enumerate audio input devices (labels only populate after a mic-permission grant)
   useEffect(() => {
@@ -308,8 +318,9 @@ function VoiceTab() {
         }
       }
       streamRef.current = stream
-      // Labels only appear post-permission — refresh so the picker becomes readable
-      if (devices.some((d) => !d.label)) {
+      // Labels only appear post-permission — refresh so the picker becomes readable.
+      // Read via ref: this runs from a mount-time ⌘⌥K closure where `devices` would be stale [].
+      if (devicesRef.current.some((d) => !d.label)) {
         navigator.mediaDevices.enumerateDevices()
           .then((l) => setDevices(l.filter((d) => d.kind === 'audioinput')))
           .catch(() => {})
@@ -330,14 +341,20 @@ function VoiceTab() {
         // Diagnostic: bytes-per-second far below ~1KB/s means we captured silence —
         // usually a hidden-window throttle or the input device not receiving system audio.
         console.log(`[ASR] 录音停止: ${durMs}ms, blob ${blob.size}B (${Math.round(blob.size / Math.max(durMs / 1000, 0.1))}B/s)`)
-        if (blob.size < 2000) { setTranscribing(false); return }  // nothing meaningful captured
+        if (blob.size < 2000) {  // nothing meaningful captured — tell the user instead of vanishing
+          setError('录音太短，没有捕获到有效音频')
+          setTranscribing(false); transcribingRef.current = false; return
+        }
+        let silent = false
         if (durMs > 1500 && blob.size / (durMs / 1000) < 800) {
+          silent = true
           setError('录到的音频几乎是静音。请确认系统输出已路由到所选输入设备（如 BlackHole 多输出设备），并保持主窗口可见或已生效的后台采集。')
         }
         try {
           const buf = await blob.arrayBuffer()
           const text = await window.electronAPI.transcribeChunk(buf, mimeType, currentLang)
           if (text) { setError(''); appendToDraft(text) }
+          else if (!silent) { setError('未识别到有效语音（可能是噪声、太短，或被降噪过滤）') }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           if (!msg.includes('could not process file') && !msg.includes('valid media')) {
@@ -345,6 +362,7 @@ function VoiceTab() {
           }
         } finally {
           setTranscribing(false)
+          transcribingRef.current = false
         }
       }
 
@@ -375,7 +393,7 @@ function VoiceTab() {
     const rec = recorderRef.current
     recorderRef.current = null
     // Stopping triggers rec.onstop, which transcribes the whole take, then clears transcribing
-    if (rec) { setTranscribing(true); rec.stop() }
+    if (rec) { setTranscribing(true); transcribingRef.current = true; rec.stop() }
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     window.electronAPI.stopListening()
@@ -393,6 +411,9 @@ function VoiceTab() {
         if (listeningRef.current) {
           stopCapture()
         } else {
+          // Don't start a new take while the previous one is still transcribing — otherwise the
+          // old onstop appends its result into the freshly-cleared new draft and desyncs the UI.
+          if (transcribingRef.current) return
           setDraftText('')
           await startCapture(langRef.current)
         }
