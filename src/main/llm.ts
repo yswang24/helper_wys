@@ -1,5 +1,7 @@
 import OpenAI from 'openai'
 import type { BrowserWindow } from 'electron'
+import { describeApiError } from './apiError'
+import { VISION_PROBE_PNG_B64 } from './visionProbe'
 
 export interface LLMConfig {
   apiKey: string
@@ -50,10 +52,18 @@ export interface HistoryRound {
   answer: string
 }
 
+// Conversation memory lives in the main process so every entry point (overlay input,
+// ask tab, voice auto-ask, screenshot-extracted text) shares one rolling context.
+const conversationHistory: HistoryRound[] = []
+const MAX_HISTORY_ROUNDS = 5
+
+export function clearHistory(): void {
+  conversationHistory.length = 0
+}
+
 export async function streamAnswer(
   question: string,
-  overlayWindow: BrowserWindow,
-  history: HistoryRound[] = []
+  overlayWindow: BrowserWindow
 ): Promise<void> {
   if (!currentConfig.apiKey) {
     overlayWindow.webContents.send('llm:error', '请先在设置中填写 API Key')
@@ -80,7 +90,7 @@ export async function streamAnswer(
     const stream = await client.chat.completions.create(
       {
         model: currentConfig.model,
-        messages: buildMessages(question, currentConfig.jobDescription, history),
+        messages: buildMessages(question, currentConfig.jobDescription, conversationHistory),
         stream: true,
         max_tokens: 2000,
         temperature: 0.7
@@ -88,11 +98,22 @@ export async function streamAnswer(
       { signal: abort.signal }
     )
 
+    let fullAnswer = ''
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content ?? ''
-      if (content) overlayWindow.webContents.send('llm:chunk', content)
+      if (content) {
+        fullAnswer += content
+        overlayWindow.webContents.send('llm:chunk', content)
+      }
     }
 
+    // Record into rolling memory only on normal completion (aborts throw and skip this)
+    if (fullAnswer.trim()) {
+      conversationHistory.push({ question, answer: fullAnswer })
+      if (conversationHistory.length > MAX_HISTORY_ROUNDS) {
+        conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY_ROUNDS)
+      }
+    }
     overlayWindow.webContents.send('llm:done')
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -119,7 +140,8 @@ export async function extractImageText(
   const client = new OpenAI({
     apiKey: currentConfig.apiKey,
     baseURL: currentConfig.baseUrl,
-    dangerouslyAllowBrowser: true
+    dangerouslyAllowBrowser: true,
+    maxRetries: 0 // fail fast — don't let SDK retries hang the "识别中" status for minutes
   })
 
   const useModel = currentConfig.visionModel || currentConfig.model
@@ -129,7 +151,7 @@ export async function extractImageText(
   overlayWindow.webContents.send('image:status', 'extracting')
 
   try {
-    const timeout = AbortSignal.timeout(60000)
+    const timeout = AbortSignal.timeout(45000)
     const result = await client.chat.completions.create({
       model: useModel,
       messages: [
@@ -137,7 +159,7 @@ export async function extractImageText(
           role: 'user',
           content: [
             { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
-            { type: 'text', text: '请识别图片中的文字内容，直接输出文字。' }
+            { type: 'text', text: '请完整识别图片中的全部文字（含代码，保留换行与缩进），逐行原样输出，不要省略、不要总结、不要补充解释。' }
           ]
         }
       ],
@@ -310,4 +332,59 @@ function buildMessages(
 
   messages.push({ role: 'user', content: question })
   return messages
+}
+
+// Connectivity test for the Settings UI — uses the values currently in the form
+// (not the saved config), so the user can verify before saving. OpenAI-compatible,
+// so SiliconFlow / DeepSeek / Groq / OpenAI all work through the same path.
+export async function testLLMConnection(
+  cfg: { apiKey: string; baseUrl: string; model: string }
+): Promise<{ ok: boolean; message: string }> {
+  if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
+  if (!cfg.model) return { ok: false, message: '请先填写模型名' }
+  const client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, dangerouslyAllowBrowser: true, maxRetries: 0 })
+  const start = Date.now()
+  try {
+    const r = await client.chat.completions.create(
+      { model: cfg.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 },
+      { signal: AbortSignal.timeout(15000) }
+    )
+    return { ok: true, message: `连接成功 · 模型 ${r.model || cfg.model} · ${Date.now() - start}ms` }
+  } catch (err) {
+    return { ok: false, message: describeApiError(err) }
+  }
+}
+
+// Vision-model connectivity test — sends a realistic screenshot (see visionProbe.ts) so
+// the user can verify the model actually accepts image input. Mirrors the real OCR path
+// (same prompt + params), and tiny-image-rejecting VLMs (Qwen-VL etc.) accept it.
+export async function testVisionConnection(
+  cfg: { apiKey: string; baseUrl: string; visionModel: string }
+): Promise<{ ok: boolean; message: string }> {
+  if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
+  if (!cfg.visionModel) return { ok: false, message: '请先填写视觉模型名' }
+  const client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, dangerouslyAllowBrowser: true, maxRetries: 0 })
+  const start = Date.now()
+  try {
+    const r = await client.chat.completions.create(
+      {
+        model: cfg.visionModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: `data:image/png;base64,${VISION_PROBE_PNG_B64}` } },
+              { type: 'text', text: '请识别图片中的文字内容，直接输出文字。' }
+            ]
+          }
+        ],
+        max_tokens: 64,
+        temperature: 0
+      },
+      { signal: AbortSignal.timeout(20000) }
+    )
+    return { ok: true, message: `连接成功 · 模型 ${r.model || cfg.visionModel} · ${Date.now() - start}ms` }
+  } catch (err) {
+    return { ok: false, message: describeApiError(err) }
+  }
 }
