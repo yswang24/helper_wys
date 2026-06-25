@@ -28,23 +28,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearAnswer: () => ipcRenderer.send('llm:clear'),
   stopAnswer: () => ipcRenderer.send('llm:stop'),
 
-  onAnswerStart: (cb: (question: string) => void): UnlistenFn => {
-    const handler = (_e: Electron.IpcRendererEvent, q: string) => cb(q)
+  onAnswerStart: (cb: (data: { id: number; question: string }) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, data: { id: number; question: string }) => cb(data)
     ipcRenderer.on('llm:start', handler)
     return () => ipcRenderer.removeListener('llm:start', handler)
   },
-  onAnswerChunk: (cb: (chunk: string) => void): UnlistenFn => {
-    const handler = (_e: Electron.IpcRendererEvent, chunk: string) => cb(chunk)
+  onAnswerChunk: (cb: (data: { id: number; chunk: string }) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, data: { id: number; chunk: string }) => cb(data)
     ipcRenderer.on('llm:chunk', handler)
     return () => ipcRenderer.removeListener('llm:chunk', handler)
   },
-  onAnswerDone: (cb: () => void): UnlistenFn => {
-    const handler = () => cb()
+  onAnswerDone: (cb: (data: { id: number }) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, data: { id: number }) => cb(data)
     ipcRenderer.on('llm:done', handler)
     return () => ipcRenderer.removeListener('llm:done', handler)
   },
-  onAnswerError: (cb: (msg: string) => void): UnlistenFn => {
-    const handler = (_e: Electron.IpcRendererEvent, msg: string) => cb(msg)
+  onAnswerError: (cb: (data: { id: number | null; message: string }) => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, data: { id: number | null; message: string }) => cb(data)
     ipcRenderer.on('llm:error', handler)
     return () => ipcRenderer.removeListener('llm:error', handler)
   },
@@ -108,10 +108,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   submitScreenshot: (region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) =>
     ipcRenderer.send('screenshot:submit', region),
   cancelScreenshot: () => ipcRenderer.send('screenshot:cancel'),
-
-  // ── Image re-ask with context ───────────────────────────────────────────────
-  reaskImageWithContext: (context: string) =>
-    ipcRenderer.send('llm:reask-image', context),
 
   // ── Image text extraction ───────────────────────────────────────────────────
   onImageText: (cb: (text: string) => void): UnlistenFn => {

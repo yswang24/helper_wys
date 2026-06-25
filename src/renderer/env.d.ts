@@ -45,10 +45,10 @@ interface ElectronAPI {
   askQuestion: (question: string) => void
   clearAnswer: () => void
   stopAnswer: () => void
-  onAnswerStart: (cb: (question: string) => void) => UnlistenFn
-  onAnswerChunk: (cb: (chunk: string) => void) => UnlistenFn
-  onAnswerDone: (cb: () => void) => UnlistenFn
-  onAnswerError: (cb: (msg: string) => void) => UnlistenFn
+  onAnswerStart: (cb: (data: { id: number; question: string }) => void) => UnlistenFn
+  onAnswerChunk: (cb: (data: { id: number; chunk: string }) => void) => UnlistenFn
+  onAnswerDone: (cb: (data: { id: number }) => void) => UnlistenFn
+  onAnswerError: (cb: (data: { id: number | null; message: string }) => void) => UnlistenFn
   onAnswerClear: (cb: () => void) => UnlistenFn
   // Overlay appearance
   onOverlayOpacity: (cb: (opacity: number) => void) => UnlistenFn
@@ -69,8 +69,6 @@ interface ElectronAPI {
   // Screenshot / coding mode
   submitScreenshot: (region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) => void
   cancelScreenshot: () => void
-  // Image re-ask with context
-  reaskImageWithContext: (context: string) => void
   // Image text extraction
   onImageText: (cb: (text: string) => void) => UnlistenFn
   onImageStatus: (cb: (status: string) => void) => UnlistenFn

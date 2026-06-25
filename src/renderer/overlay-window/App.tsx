@@ -76,13 +76,18 @@ export function App() {
 
     // Block any focus that wasn't from a direct input click
     const onFocusIn = (e: FocusEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
+      const target = e.target as HTMLElement
+      // Always allow our own input/extracted textareas — they're focused programmatically
+      // (e.g. the 输入 button's setTimeout focus), which has no preceding input mousedown.
+      if (target === inputRef.current || target === extractedRef.current) {
+        inputClicked = false
+        return
+      }
+      const tag = target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') {
-        if (!inputClicked) {
-          ;(e.target as HTMLElement).blur()
-        }
+        if (!inputClicked) target.blur()
       } else {
-        ;(e.target as HTMLElement).blur?.()
+        target?.blur?.()
       }
       inputClicked = false
     }
@@ -113,30 +118,35 @@ export function App() {
   }, [])
 
   // ── LLM events ──────────────────────────────────────────────────────────────
+  // Every event carries the main-process stream id, so chunks/done/error attach to the RIGHT
+  // bubble even when streams overlap — instead of blindly mutating the last item.
   useEffect(() => {
-    const unStart = window.electronAPI.onAnswerStart((q) => {
-      const id = nextIdRef.current++
-      setHistory((prev) => [...prev, { id, question: q, answer: '', status: 'streaming', errorMsg: '' }])
+    const unStart = window.electronAPI.onAnswerStart(({ id, question }) => {
+      setHistory((prev) => [...prev, { id, question, answer: '', status: 'streaming', errorMsg: '' }])
     })
-    const unChunk = window.electronAPI.onAnswerChunk((chunk) => {
-      setHistory((prev) => {
-        if (prev.length === 0) return prev
-        const last = prev[prev.length - 1]
-        return [...prev.slice(0, -1), { ...last, answer: last.answer + chunk }]
-      })
+    const unChunk = window.electronAPI.onAnswerChunk(({ id, chunk }) => {
+      setHistory((prev) => prev.map((it) => (it.id === id ? { ...it, answer: it.answer + chunk } : it)))
     })
-    const unDone = window.electronAPI.onAnswerDone(() => {
-      setHistory((prev) => {
-        if (prev.length === 0) return prev
-        const last = prev[prev.length - 1]
-        return [...prev.slice(0, -1), { ...last, status: 'done' as LLMStatus }]
-      })
+    const unDone = window.electronAPI.onAnswerDone(({ id }) => {
+      setHistory((prev) => prev.map((it) => (it.id === id ? { ...it, status: 'done' as LLMStatus } : it)))
     })
-    const unError = window.electronAPI.onAnswerError((msg) => {
+    const unError = window.electronAPI.onAnswerError(({ id, message }) => {
       setHistory((prev) => {
-        if (prev.length === 0) return prev
-        const last = prev[prev.length - 1]
-        return [...prev.slice(0, -1), { ...last, status: 'error' as LLMStatus, errorMsg: msg }]
+        if (id != null && prev.some((it) => it.id === id)) {
+          return prev.map((it) => (it.id === id ? { ...it, status: 'error' as LLMStatus, errorMsg: message } : it))
+        }
+        // No matching stream (e.g. empty-key error before any start, or an independent ⌘⌥O
+        // screenshot failure). Surface a standalone error item instead of dropping it. Negative
+        // id can't collide with main-process stream ids.
+        const synthId = -(nextIdRef.current++)
+        const errItem = { id: synthId, question: '', answer: '', status: 'error' as LLMStatus, errorMsg: message }
+        // If a stream is still live as the last item, keep IT last so the status bar / 停止 button
+        // / auto-scroll stay bound to the live answer — insert the error just before it.
+        const lastIdx = prev.length - 1
+        if (lastIdx >= 0 && prev[lastIdx].status === 'streaming') {
+          return [...prev.slice(0, lastIdx), errItem, prev[lastIdx]]
+        }
+        return [...prev, errItem]
       })
     })
     const unClear = window.electronAPI.onAnswerClear(() => {
@@ -177,15 +187,17 @@ export function App() {
   const allTranscript = finalLines.join(' ')
 
   return (
-    <div className="h-screen w-screen overflow-hidden" style={{ pointerEvents: 'none' } as React.CSSProperties}>
+    // Interactivity is driven by the main process toggling setIgnoreMouseEvents from the cursor
+    // position (index.ts heartbeat), so the whole window is either click-through or not — a CSS
+    // none/auto split here would only imply per-pixel precision the bounds poll doesn't have.
+    <div className="h-screen w-screen overflow-hidden">
       <div
         ref={panelRef}
         className="flex flex-col rounded-xl overflow-hidden shadow-2xl h-full w-full"
         style={{
           background: `rgba(10, 10, 16, ${bgOpacity})`,
           border: '1px solid rgba(70, 70, 110, 0.6)',
-          backdropFilter: 'blur(16px)',
-          pointerEvents: 'auto'
+          backdropFilter: 'blur(16px)'
         }}
       >
         {/* Drag handle */}
@@ -344,16 +356,18 @@ export function App() {
           )}
           {history.map((item, idx) => (
             <div key={item.id} className="mb-4">
-              {/* Question */}
-              <div
-                className="px-3 py-2 border-b flex-shrink-0 mb-2"
-                style={{ borderColor: 'rgba(50, 50, 80, 0.4)', background: 'rgba(15, 15, 28, 0.5)' }}
-              >
-                <div className="text-xs" style={{ color: '#475569' }}>问题</div>
-                <div className="text-xs mt-0.5 leading-relaxed" style={{ color: '#64748b' }}>
-                  {item.question}
+              {/* Question (omitted for standalone error items that have no question) */}
+              {item.question && (
+                <div
+                  className="px-3 py-2 border-b flex-shrink-0 mb-2"
+                  style={{ borderColor: 'rgba(50, 50, 80, 0.4)', background: 'rgba(15, 15, 28, 0.5)' }}
+                >
+                  <div className="text-xs" style={{ color: '#475569' }}>问题</div>
+                  <div className="text-xs mt-0.5 leading-relaxed" style={{ color: '#64748b' }}>
+                    {item.question}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Answer */}
               {item.status === 'error' && (
@@ -514,10 +528,15 @@ function StatusDot({ llm, listening }: { llm: LLMStatus; listening: boolean }) {
 // ── Copy button ───────────────────────────────────────────────────────────────
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  // Clear the reset timer on unmount — copying then asking again within 1.8s unmounts this
+  // button (it's bound to the last 'done' item), so the timer would otherwise leak / fire late.
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
   const copy = () => {
     window.electronAPI.copyText(text)
     setCopied(true)
-    setTimeout(() => setCopied(false), 1800)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => setCopied(false), 1800)
   }
   return (
     <button
@@ -587,9 +606,13 @@ function parseSegments(text: string, streaming: boolean): Segment[] {
   }
   const rem = text.slice(last)
   if (rem) {
-    const open = streaming ? rem.match(/```(\w*)\n?([\s\S]*)$/) : null
+    // Only treat a trailing ``` as an OPEN code fence if it starts a line — otherwise a stray
+    // inline ``` in prose ("use the ``` operator") would flip everything after it into a code
+    // block mid-stream. The leading newline (if matched) stays with the preceding text.
+    const open = streaming ? rem.match(/(?:^|\n)```(\w*)\n?([\s\S]*)$/) : null
     if (open) {
-      if (open.index! > 0) segs.push({ type: 'text', content: rem.slice(0, open.index) })
+      const fenceStart = open.index! + (rem[open.index!] === '\n' ? 1 : 0)
+      if (fenceStart > 0) segs.push({ type: 'text', content: rem.slice(0, fenceStart) })
       segs.push({ type: 'code', lang: open[1] || undefined, content: open[2] })
     } else {
       segs.push({ type: 'text', content: rem })
