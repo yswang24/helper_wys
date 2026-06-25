@@ -4,17 +4,18 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection } from './llm'
+import { streamAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let selectorWindow: BrowserWindow | null = null
+let selectorDisplayId: number | null = null  // which display the active selector covers (multi-monitor)
 let tray: Tray | null = null
 let overlayUserVisible = true  // tracks whether user wants overlay visible
-let lastScreenshotBase64: string | null = null
 let isQuitting = false  // distinguishes "hide main window" from a real app quit
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null  // overlay mouse/restore heartbeat
 const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
 
 function registerShortcut(accelerator: string, handler: () => void): void {
@@ -22,6 +23,13 @@ function registerShortcut(accelerator: string, handler: () => void): void {
     failedShortcuts.push(accelerator)
     console.warn(`[Shortcut] 注册失败（可能被其他应用占用）: ${accelerator}`)
   }
+}
+
+// Defense-in-depth for every window: block navigation away from the bundled renderer and deny
+// window.open, so a compromised/redirected renderer can't reach the (broad) session handlers.
+function hardenWebContents(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', (e) => e.preventDefault())
 }
 
 function createMainWindow(): void {
@@ -52,6 +60,7 @@ function createMainWindow(): void {
 
   // Invisible to screen capture as well (safety net)
   mainWindow.setContentProtection(true)
+  hardenWebContents(mainWindow)
 
   // 点 X → 仅隐藏主窗口，应用继续在托盘后台运行；真正退出走托盘菜单或 ⌘⌥Q
   mainWindow.on('close', (e) => {
@@ -113,6 +122,7 @@ function createOverlayWindow(): void {
 
   // Invisible to all screen capture (DXGI / getDisplayMedia / OBS)
   overlayWindow.setContentProtection(true)
+  hardenWebContents(overlayWindow)
   // screen-saver level keeps overlay above conferencing app overlays on Windows
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
   // Always forward mouse events so overlay can use CSS pointer-events for precise hit regions
@@ -131,14 +141,17 @@ function createOverlayWindow(): void {
 }
 
 function createSelectorWindow(): void {
-  const display = screen.getPrimaryDisplay()
-  const { width, height } = display.bounds
+  // Cover the display the cursor is on, not always the primary — otherwise a second monitor
+  // can never be selected. Use its real origin (x/y), not 0,0, so it lands on that screen.
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const { x, y, width, height } = display.bounds
+  selectorDisplayId = display.id
 
   selectorWindow = new BrowserWindow({
     width,
     height,
-    x: 0,
-    y: 0,
+    x,
+    y,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -155,9 +168,18 @@ function createSelectorWindow(): void {
   // Must be content-protected so the selection UI is invisible to screen capture
   selectorWindow.setContentProtection(true)
   selectorWindow.setIgnoreMouseEvents(false)
+  hardenWebContents(selectorWindow)
   // Raise above the menu bar / Dock so the dim overlay truly covers the whole screen
   selectorWindow.setAlwaysOnTop(true, 'screen-saver')
   selectorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+
+  // Main-side dismissal fallbacks: the selector is a full-screen, content-protected,
+  // always-on-top overlay. If the renderer fails to load (or hasn't wired its keydown yet),
+  // these guarantee Escape and a load failure can still close it instead of trapping the screen.
+  selectorWindow.webContents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') selectorWindow?.close()
+  })
+  selectorWindow.webContents.on('did-fail-load', () => selectorWindow?.close())
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {
@@ -168,6 +190,7 @@ function createSelectorWindow(): void {
 
   selectorWindow.on('closed', () => {
     selectorWindow = null
+    selectorDisplayId = null
   })
 }
 
@@ -177,18 +200,21 @@ app.whenReady().then(() => {
   if (Object.keys(saved).length) setConfig(saved)
   if (saved.asrApiKey || saved.asrBaseUrl || saved.asrModel) {
     setASRConfig({
-      apiKey: saved.asrApiKey ?? '',
-      baseUrl: saved.asrBaseUrl ?? 'https://api.openai.com/v1',
-      model: saved.asrModel ?? 'whisper-1'
+      // `||` not `??`: a persisted empty string (user cleared the field) must fall back to the
+      // default, otherwise the API gets an empty model/baseUrl and the request fails.
+      apiKey: saved.asrApiKey || '',
+      baseUrl: saved.asrBaseUrl || 'https://api.openai.com/v1',
+      model: saved.asrModel || 'whisper-1'
     })
   }
 
-  // Allow all permissions (media capture etc)
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
-    callback(true)
+  // Grant ONLY microphone/media — the only capability this app needs. Granting everything
+  // would hand geolocation/camera/clipboard-read/openExternal to any future renderer compromise.
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media')
   })
 
-  session.defaultSession.setPermissionCheckHandler(() => true)
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media')
 
   createMainWindow()
   createOverlayWindow()
@@ -198,13 +224,14 @@ app.whenReady().then(() => {
   // clicks when the cursor is actually inside the window bounds.
   let lastIgnoreState = true
 
-  setInterval(() => {
+  heartbeatTimer = setInterval(() => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
     // Restore overlay if it was hidden by OS/conferencing app
     if (overlayUserVisible && !overlayWindow.isVisible()) {
       overlayWindow.show()
       overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+      updateTrayMenu()  // visibility changed → refresh the tray label
       lastIgnoreState = true
     }
 
@@ -234,6 +261,7 @@ app.whenReady().then(() => {
         click: () => {
           if (overlayWindow?.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
           else { overlayUserVisible = true; overlayWindow?.show() }
+          updateTrayMenu()  // rebuild so the label reflects the new visibility
         }
       },
       { type: 'separator' },
@@ -280,6 +308,7 @@ app.whenReady().then(() => {
     if (!overlayWindow) return
     if (overlayWindow.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
     else { overlayUserVisible = true; overlayWindow.show() }
+    updateTrayMenu()  // keep the tray label in sync with overlay visibility
   })
 
   // ⌘⌥M — 切换主控制台窗口显隐
@@ -296,6 +325,7 @@ app.whenReady().then(() => {
 
   // ⌘⌥X — clear answer (changed from C which conflicts with B站)
   registerShortcut('CommandOrControl+Alt+X', () => {
+    stopStreaming()  // abort any in-flight stream so it doesn't keep generating into an empty UI
     clearHistory()
     overlayWindow?.webContents.send('llm:clear')
   })
@@ -330,12 +360,11 @@ app.whenReady().then(() => {
         captured = captured.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
       }
       const imageBase64 = captured.toPNG().toString('base64')
-      lastScreenshotBase64 = imageBase64
       console.log(`[OverlayCapture] captured: ${width}x${height}, size: ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
       extractImageText(imageBase64, overlayWindow)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      overlayWindow.webContents.send('llm:error', `overlay截图失败: ${msg}`)
+      overlayWindow.webContents.send('llm:error', { id: null, message: `overlay截图失败: ${msg}` })
     }
   })
 })
@@ -357,6 +386,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
   globalShortcut.unregisterAll()
 })
 
@@ -445,7 +475,9 @@ function waitForStreamEnd(callback: () => void): void {
 
 ipcMain.on('llm:ask', (_e, question: string) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(question, overlayWindow!)
+  // Re-check at call time: when deferred via waitForStreamEnd (up to ~4s) the overlay could be
+  // gone by the time start() runs, and streamAnswer would deref a destroyed window.
+  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) streamAnswer(question, overlayWindow) }
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -455,6 +487,7 @@ ipcMain.on('llm:ask', (_e, question: string) => {
 })
 
 ipcMain.on('llm:clear', () => {
+  stopStreaming()  // abort any in-flight stream so it doesn't keep generating into an empty UI
   clearHistory()
   overlayWindow?.webContents.send('llm:clear')
 })
@@ -463,25 +496,10 @@ ipcMain.on('llm:stop', () => {
   stopStreaming()
 })
 
-ipcMain.on('llm:reask-image', (_e, userContext: string) => {
-  if (!overlayWindow) return
-  if (!lastScreenshotBase64) {
-    overlayWindow.webContents.send('llm:error', '没有缓存的截图，请先截图')
-    return
-  }
-  const startImage = () => streamImageAnswer(lastScreenshotBase64!, overlayWindow!, userContext)
-  if (isCurrentlyStreaming()) {
-    stopStreaming()
-    waitForStreamEnd(startImage)
-  } else {
-    startImage()
-  }
-})
-
 // Overlay sends extracted text → LLM answers
 ipcMain.on('llm:ask-extracted', (_e, text: string) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(text, overlayWindow!)
+  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) streamAnswer(text, overlayWindow) }
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -495,7 +513,8 @@ ipcMain.on('llm:ask-extracted', (_e, text: string) => {
 ipcMain.on('asr:start', () => overlayWindow?.webContents.send('asr:start'))
 ipcMain.on('asr:stop', () => overlayWindow?.webContents.send('asr:stop'))
 
-// Transcript arrives from main window, forward to both overlay (display) and main window (transcript log)
+// Transcript arrives from the main window; forward it to the overlay's transcript panel.
+// (The main window already shows its own draft locally, so it isn't echoed back here.)
 ipcMain.on('asr:transcript', (_e, data: { text: string; isFinal: boolean }) => {
   overlayWindow?.webContents.send('asr:transcript', data)
 })
@@ -503,7 +522,7 @@ ipcMain.on('asr:transcript', (_e, data: { text: string; isFinal: boolean }) => {
 // Overlay asks main to auto-submit a transcribed question to LLM
 ipcMain.on('asr:auto-ask', (_e, question: string) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(question, overlayWindow!)
+  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) streamAnswer(question, overlayWindow) }
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -534,7 +553,8 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
   if (!overlayWindow) return
 
   try {
-    const display = screen.getPrimaryDisplay()
+    // Crop against the display the selector actually covered (multi-monitor) — not always primary.
+    const display = screen.getAllDisplays().find((d) => d.id === selectorDisplayId) ?? screen.getPrimaryDisplay()
     const { width, height } = display.bounds  // logical pixels (same space as selector coords)
 
     // Timeout guard — desktopCapturer can hang on macOS without screen recording permission
@@ -547,7 +567,8 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
     )
     const sources = await Promise.race([capturePromise, timeoutPromise])
 
-    const source = sources[0]
+    // Pick the source matching our display — desktopCapturer doesn't guarantee sources[0] is it.
+    const source = sources.find((s) => String(s.display_id) === String(display.id)) ?? sources[0]
     if (!source) throw new Error('无法获取屏幕截图')
 
     const thumb = source.thumbnail
@@ -580,7 +601,6 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
     }
 
     const imageBase64 = cropped.toPNG().toString('base64')
-    lastScreenshotBase64 = imageBase64
     console.log(`[Screenshot] region ${region.w}x${region.h} → ${cropped.getSize().width}x${cropped.getSize().height}, thumb ${tsize.width}x${tsize.height}, ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
 
     // Step 1: Extract text from image via vision model
