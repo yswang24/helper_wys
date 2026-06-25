@@ -4,8 +4,8 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, type HistoryRound } from './llm'
-import { transcribeAudio, setASRConfig, getASRConfig } from './asr'
+import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection } from './llm'
+import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
 let mainWindow: BrowserWindow | null = null
@@ -14,6 +14,15 @@ let selectorWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let overlayUserVisible = true  // tracks whether user wants overlay visible
 let lastScreenshotBase64: string | null = null
+let isQuitting = false  // distinguishes "hide main window" from a real app quit
+const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
+
+function registerShortcut(accelerator: string, handler: () => void): void {
+  if (!globalShortcut.register(accelerator, handler)) {
+    failedShortcuts.push(accelerator)
+    console.warn(`[Shortcut] 注册失败（可能被其他应用占用）: ${accelerator}`)
+  }
+}
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -21,13 +30,16 @@ function createMainWindow(): void {
     height: 820,
     minWidth: 400,
     minHeight: 600,
-    title: 'Interview Assistant',
+    title: 'Helper',
     backgroundColor: '#0f0f14',
     skipTaskbar: true,   // 不显示在任务栏
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // 录音的 MediaRecorder 跑在本窗口里，而本窗口常被隐藏（⌘⌥M）。默认的后台节流会
+      // 掐住隐藏窗口的编码管线，导致录到的音频近乎静音、Whisper 只回一个字。必须关掉。
+      backgroundThrottling: false
     }
   })
 
@@ -41,15 +53,41 @@ function createMainWindow(): void {
   // Invisible to screen capture as well (safety net)
   mainWindow.setContentProtection(true)
 
-  // 点 X 关闭按钮 → 完全退出应用
-  mainWindow.on('close', () => {
-    overlayWindow?.close()
-    app.quit()
+  // 点 X → 仅隐藏主窗口，应用继续在托盘后台运行；真正退出走托盘菜单或 ⌘⌥Q
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault()
+      mainWindow?.hide()
+    }
   })
 
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+}
+
+// 统一的"把主窗口唤回前台"入口。Dock 图标点击、托盘点击、⌘⌥M 都走这里，
+// 保证 null/已销毁/屏幕外 三种边界都被处理。
+function restoreMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    // 窗口已真正销毁，只可能发生在一次没走完的退出之后。重建前清掉退出标记，
+    // 否则新窗口继承 isQuitting=true，下次点 X 会变成真关而非隐藏，bug 复发。
+    isQuitting = false
+    createMainWindow()
+    return
+  }
+  // 把窗口夹回某个仍连接的显示器可视区域内，避免它停在已断开的副屏/改过分辨率后的
+  // 屏幕外——那样 show() 了却看不见，等同于"点了没反应"。（与 overlay 的夹取逻辑一致）
+  const b = mainWindow.getBounds()
+  const area = screen.getDisplayMatching(b).workArea
+  mainWindow.setBounds({
+    x: Math.round(Math.min(Math.max(b.x, area.x), area.x + area.width - b.width)),
+    y: Math.round(Math.min(Math.max(b.y, area.y), area.y + area.height - b.height)),
+    width: b.width,
+    height: b.height
+  })
+  mainWindow.show()
+  mainWindow.focus()
 }
 
 function createOverlayWindow(): void {
@@ -117,6 +155,9 @@ function createSelectorWindow(): void {
   // Must be content-protected so the selection UI is invisible to screen capture
   selectorWindow.setContentProtection(true)
   selectorWindow.setIgnoreMouseEvents(false)
+  // Raise above the menu bar / Dock so the dim overlay truly covers the whole screen
+  selectorWindow.setAlwaysOnTop(true, 'screen-saver')
+  selectorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {
@@ -141,17 +182,6 @@ app.whenReady().then(() => {
       model: saved.asrModel ?? 'whisper-1'
     })
   }
-
-  // Intercept getDisplayMedia → return first screen + WASAPI loopback audio (Windows)
-  // useSystemPicker:false required in Electron 25+ so our handler runs immediately without OS picker
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(session.defaultSession.setDisplayMediaRequestHandler as any)(
-    async (_request: unknown, callback: (r: unknown) => void) => {
-      const sources = await desktopCapturer.getSources({ types: ['screen'] })
-      callback({ video: sources[0], audio: 'loopback' })
-    },
-    { useSystemPicker: false }
-  )
 
   // Allow all permissions (media capture etc)
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => {
@@ -195,7 +225,7 @@ app.whenReady().then(() => {
   const iconPath = join(__dirname, '../../resources/icon.png')
   const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
   tray = new Tray(trayIcon)
-  tray.setToolTip('Interview Assistant')
+  tray.setToolTip('Helper')
 
   const updateTrayMenu = () => {
     const menu = Menu.buildFromTemplate([
@@ -210,7 +240,8 @@ app.whenReady().then(() => {
       {
         label: '退出',
         click: () => {
-          mainWindow?.close()
+          isQuitting = true
+          app.quit()
         }
       }
     ])
@@ -219,13 +250,17 @@ app.whenReady().then(() => {
   updateTrayMenu()
 
   tray.on('click', () => {
-    mainWindow?.show()
-    mainWindow?.focus()
+    restoreMainWindow()
   })
 
-  // Restore saved overlay position
+  // Restore saved overlay position, clamped to a visible display — a stale off-screen
+  // position (e.g. after a resolution change) would otherwise lose the window.
   if (overlayWindow && saved.overlayX !== undefined && saved.overlayY !== undefined) {
-    overlayWindow.setPosition(saved.overlayX, saved.overlayY)
+    const [w, h] = overlayWindow.getSize()
+    const area = screen.getDisplayMatching({ x: saved.overlayX, y: saved.overlayY, width: w, height: h }).workArea
+    const x = Math.round(Math.min(Math.max(saved.overlayX, area.x), area.x + area.width - w))
+    const y = Math.round(Math.min(Math.max(saved.overlayY, area.y), area.y + area.height - h))
+    overlayWindow.setPosition(x, y)
   }
 
   // Save overlay position whenever it's moved
@@ -241,25 +276,40 @@ app.whenReady().then(() => {
     overlayWindow.webContents.send('overlay:opacity', saved.overlayOpacity)
   }
 
-  globalShortcut.register('CommandOrControl+Shift+H', () => {
+  registerShortcut('CommandOrControl+Alt+H', () => {
     if (!overlayWindow) return
     if (overlayWindow.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
     else { overlayUserVisible = true; overlayWindow.show() }
   })
 
-  // Ctrl+Shift+X — clear answer (changed from C which conflicts with B站)
-  globalShortcut.register('CommandOrControl+Shift+X', () => {
+  // ⌘⌥M — 切换主控制台窗口显隐
+  registerShortcut('CommandOrControl+Alt+M', () => {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) mainWindow.hide()
+    else restoreMainWindow()  // null/已销毁时也能重建唤回
+  })
+
+  // ⌘⌥Q — 真正退出（关主窗口已改为隐藏）
+  registerShortcut('CommandOrControl+Alt+Q', () => {
+    isQuitting = true
+    app.quit()
+  })
+
+  // ⌘⌥X — clear answer (changed from C which conflicts with B站)
+  registerShortcut('CommandOrControl+Alt+X', () => {
+    clearHistory()
     overlayWindow?.webContents.send('llm:clear')
   })
 
-  // Toggle ASR listening — notify main window to start/stop capture, overlay for indicator
-  globalShortcut.register('CommandOrControl+Shift+L', () => {
-    mainWindow?.webContents.send('asr:toggle')
-    overlayWindow?.webContents.send('asr:toggle')
+  // Toggle ASR: ⌘⌥K starts/stops recording. The renderer (VoiceTab) is the single
+  // source of truth for "am I recording" — we just nudge it to flip. A main-side
+  // boolean would drift out of sync whenever capture stops on its own (device
+  // unplugged, failed start), inverting start/stop and misaligning the recorded clip.
+  registerShortcut('CommandOrControl+Alt+K', () => {
+    mainWindow?.webContents.send('asr:ptt-toggle')
   })
 
   // Activate region selector for coding screenshot
-  globalShortcut.register('CommandOrControl+Shift+S', () => {
+  registerShortcut('CommandOrControl+Alt+S', () => {
     if (selectorWindow) {
       selectorWindow.close()
       return
@@ -268,7 +318,7 @@ app.whenReady().then(() => {
   })
 
   // Capture overlay window directly via capturePage() — bypasses content protection
-  globalShortcut.register('CommandOrControl+Shift+O', async () => {
+  registerShortcut('CommandOrControl+Alt+O', async () => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
     try {
       const image = await overlayWindow.capturePage()
@@ -290,6 +340,18 @@ app.whenReady().then(() => {
   })
 })
 
+// 任何退出路径（⌘Q、右键 Dock→退出、托盘退出、app.quit()）都先置位。
+// 否则 mainWindow 的 close 处理器会 preventDefault 把退出吞掉，进程残留、Dock 图标退不掉。
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
+// macOS：点击程序坞图标会触发 'activate'。主窗口被 X 关闭后只是隐藏（见 close 处理器），
+// 没有这个监听，点 Dock 图标毫无反应。这里把隐藏/已销毁的主窗口重新唤回。
+app.on('activate', () => {
+  restoreMainWindow()
+})
+
 app.on('window-all-closed', () => {
   app.quit()
 })
@@ -308,10 +370,22 @@ ipcMain.handle('app:get-status', () => ({
   contentProtection: true,
   overlayVisible: overlayWindow?.isVisible() ?? false,
   platform: process.platform,
-  version: app.getVersion()
+  version: app.getVersion(),
+  failedShortcuts
 }))
 
 // ── IPC: config ───────────────────────────────────────────────────────────────
+// Connectivity tests use the values passed from the settings form (may be unsaved)
+ipcMain.handle('config:test-llm', (_e, cfg: { apiKey: string; baseUrl: string; model: string }) =>
+  testLLMConnection(cfg)
+)
+ipcMain.handle('config:test-vision', (_e, cfg: { apiKey: string; baseUrl: string; visionModel: string }) =>
+  testVisionConnection(cfg)
+)
+ipcMain.handle('config:test-asr', (_e, cfg: { apiKey: string; baseUrl: string; model: string }) =>
+  testASRConnection(cfg)
+)
+
 ipcMain.handle('config:get', () => {
   const asr = getASRConfig()
   const persisted = loadPersistedConfig()
@@ -325,30 +399,32 @@ ipcMain.handle('config:get', () => {
 })
 
 ipcMain.on('config:set', (_e, partial) => {
-  console.log('[Config] received:', partial)
-  // Split LLM vs ASR fields
-  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, ...llmPartial } = partial as Record<string, unknown>
+  const p = partial as Record<string, unknown>
+  // Log only field names — never the values (would leak API keys)
+  console.log('[Config] received keys:', Object.keys(p).join(', '))
+  // Update in-memory configs for immediate use
+  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, ...llmPartial } = p
   if (Object.keys(llmPartial).length) setConfig(llmPartial as Record<string, string>)
   if (asrApiKey !== undefined || asrBaseUrl !== undefined || asrModel !== undefined) {
-    setASRConfig({ apiKey: asrApiKey as string, baseUrl: asrBaseUrl as string, model: asrModel as string })
+    const cur = getASRConfig()
+    setASRConfig({
+      apiKey: asrApiKey !== undefined ? (asrApiKey as string) : cur.apiKey,
+      baseUrl: asrBaseUrl !== undefined ? (asrBaseUrl as string) : cur.baseUrl,
+      model: asrModel !== undefined ? (asrModel as string) : cur.model
+    })
   }
   if (overlayOpacity !== undefined) {
-    const op = parseFloat(overlayOpacity as string)
-    overlayWindow?.webContents.send('overlay:opacity', op)
+    overlayWindow?.webContents.send('overlay:opacity', Number(overlayOpacity))
   }
-  // Persist both sets, skip jobDescription
-  const { jobDescription: _jd, ...llmSaveable } = getConfig()
-  const asrSaveable = getASRConfig()
-  const persisted = loadPersistedConfig()
-  persistConfig({
-    ...llmSaveable,
-    asrApiKey: asrSaveable.apiKey,
-    asrBaseUrl: asrSaveable.baseUrl,
-    asrModel: asrSaveable.model,
-    overlayX: persisted.overlayX,
-    overlayY: persisted.overlayY,
-    overlayOpacity: overlayOpacity !== undefined ? parseFloat(overlayOpacity as string) : persisted.overlayOpacity,
-  })
+  // Persist via read-modify-write: only overwrite fields actually provided, so a
+  // partial update (e.g. the opacity slider) can never blank out a saved API key.
+  const merged = loadPersistedConfig() as Record<string, unknown>
+  for (const k of Object.keys(p)) {
+    if (k === 'jobDescription') continue
+    if (p[k] !== undefined) merged[k] = p[k]
+  }
+  if (overlayOpacity !== undefined) merged.overlayOpacity = Number(overlayOpacity)
+  persistConfig(merged as Parameters<typeof persistConfig>[0])
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
@@ -367,9 +443,9 @@ function waitForStreamEnd(callback: () => void): void {
   tick()
 }
 
-ipcMain.on('llm:ask', (_e, question: string, history: HistoryRound[] = []) => {
+ipcMain.on('llm:ask', (_e, question: string) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(question, overlayWindow!, history)
+  const start = () => streamAnswer(question, overlayWindow!)
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -379,6 +455,7 @@ ipcMain.on('llm:ask', (_e, question: string, history: HistoryRound[] = []) => {
 })
 
 ipcMain.on('llm:clear', () => {
+  clearHistory()
   overlayWindow?.webContents.send('llm:clear')
 })
 
@@ -402,9 +479,9 @@ ipcMain.on('llm:reask-image', (_e, userContext: string) => {
 })
 
 // Overlay sends extracted text → LLM answers
-ipcMain.on('llm:ask-extracted', (_e, text: string, history: HistoryRound[] = []) => {
+ipcMain.on('llm:ask-extracted', (_e, text: string) => {
   if (!overlayWindow) return
-  const start = () => streamAnswer(text, overlayWindow!, history)
+  const start = () => streamAnswer(text, overlayWindow!)
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -435,16 +512,6 @@ ipcMain.on('asr:auto-ask', (_e, question: string) => {
   start()
 })
 
-// Main window sets ASR language; forward to overlay
-ipcMain.on('asr:set-lang', (_e, lang: string) => {
-  overlayWindow?.webContents.send('asr:lang-changed', lang)
-})
-
-// Main window sets audio source (mic | system); forward to overlay
-ipcMain.on('asr:set-source', (_e, source: string) => {
-  overlayWindow?.webContents.send('asr:source-changed', source)
-})
-
 // Overlay sends audio chunk → Whisper API → returns text
 ipcMain.handle('asr:transcribe', async (_e, audio: ArrayBuffer, mimeType: string, lang: string) => {
   const buf = Buffer.from(audio)
@@ -461,21 +528,19 @@ ipcMain.on('screenshot:cancel', () => {
   selectorWindow?.close()
 })
 
-ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: number; h: number }) => {
+ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) => {
+  // Close the selector FIRST — otherwise its "截图中..." can stay stuck if anything below fails
+  selectorWindow?.close()
   if (!overlayWindow) return
 
   try {
-    // Close selector immediately — it has content protection so won't affect capture
-    selectorWindow?.close()
-
     const display = screen.getPrimaryDisplay()
-    const sf = display.scaleFactor  // e.g. 1.25 on 125% DPI
-    const { width, height } = display.bounds  // logical pixels
+    const { width, height } = display.bounds  // logical pixels (same space as selector coords)
 
     // Timeout guard — desktopCapturer can hang on macOS without screen recording permission
     const capturePromise = desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: { width: Math.round(width * sf), height: Math.round(height * sf) }
+      thumbnailSize: { width: Math.round(width * display.scaleFactor), height: Math.round(height * display.scaleFactor) }
     })
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('截图超时，请检查屏幕录制权限')), 10000)
@@ -485,18 +550,25 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
     const source = sources[0]
     if (!source) throw new Error('无法获取屏幕截图')
 
-    // DEBUG: save full screenshot
-    const fs = require('fs')
-    fs.writeFileSync('/tmp/screenshot_full.png', source.thumbnail.toPNG())
-    console.log(`[Screenshot] full screen: ${source.thumbnail.getSize().width}x${source.thumbnail.getSize().height}`)
+    const thumb = source.thumbnail
+    const tsize = thumb.getSize()
+    if (tsize.width === 0 || tsize.height === 0) {
+      throw new Error('截屏内容为空 —— 请到 系统设置 → 隐私与安全性 → 屏幕录制，给运行本应用的程序（开发时是终端/VS Code，打包后是 Helper）授权后重启')
+    }
 
-    // Region coords from renderer are logical pixels — scale to physical pixels
-    let cropped = source.thumbnail.crop({
-      x: Math.round(region.x * sf),
-      y: Math.round(region.y * sf),
-      width: Math.round(region.w * sf),
-      height: Math.round(region.h * sf)
-    })
+    // Map selector(viewport) coords → thumbnail pixels using the selector's OWN reported
+    // viewport size. display.bounds can differ from the actual viewport on notched/scaled
+    // Macs, which would push the crop past the thumbnail edge and clip the right/bottom.
+    const vw = region.vw || width
+    const vh = region.vh || height
+    const scaleX = tsize.width / vw
+    const scaleY = tsize.height / vh
+    const cx = Math.max(0, Math.round(region.x * scaleX))
+    const cy = Math.max(0, Math.round(region.y * scaleY))
+    const cw = Math.min(Math.round(region.w * scaleX), tsize.width - cx)
+    const ch = Math.min(Math.round(region.h * scaleY), tsize.height - cy)
+    console.log(`[Screenshot] region ${region.w}x${region.h}@${region.x},${region.y} · vw=${vw}x${vh} · thumb=${tsize.width}x${tsize.height} · crop=${cw}x${ch}@${cx},${cy}`)
+    let cropped = thumb.crop({ x: cx, y: cy, width: cw, height: ch })
 
     // Downscale if too large — keeps API calls fast and avoids timeouts
     const maxSize = 2000
@@ -509,15 +581,12 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
 
     const imageBase64 = cropped.toPNG().toString('base64')
     lastScreenshotBase64 = imageBase64
-    console.log(`[Screenshot] captured: ${region.w}x${region.h}, original: ${cropW}x${cropH}, sent: ${cropped.getSize().width}x${cropped.getSize().height}, size: ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
-    fs.writeFileSync('/tmp/screenshot_debug.b64', imageBase64)
-    fs.writeFileSync('/tmp/screenshot_debug.png', cropped.toPNG())
-    console.log('[Screenshot] DEBUG: saved to /tmp/screenshot_debug.png and /tmp/screenshot_debug.b64')
+    console.log(`[Screenshot] region ${region.w}x${region.h} → ${cropped.getSize().width}x${cropped.getSize().height}, thumb ${tsize.width}x${tsize.height}, ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
 
     // Step 1: Extract text from image via vision model
-    extractImageText(imageBase64, overlayWindow!)
+    extractImageText(imageBase64, overlayWindow)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    overlayWindow?.webContents.send('llm:error', `截图失败: ${msg}`)
+    overlayWindow?.webContents.send('image:error', `截图失败: ${msg}`)
   }
 })

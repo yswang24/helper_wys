@@ -15,10 +15,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (partial: Record<string, string>) =>
     ipcRenderer.send('config:set', partial),
+  testLLM: (cfg: { apiKey: string; baseUrl: string; model: string }) =>
+    ipcRenderer.invoke('config:test-llm', cfg),
+  testVision: (cfg: { apiKey: string; baseUrl: string; visionModel: string }) =>
+    ipcRenderer.invoke('config:test-vision', cfg),
+  testASR: (cfg: { apiKey: string; baseUrl: string; model: string }) =>
+    ipcRenderer.invoke('config:test-asr', cfg),
 
   // ── LLM ─────────────────────────────────────────────────────────────────────
-  askQuestion: (question: string, history?: { question: string; answer: string }[]) =>
-    ipcRenderer.send('llm:ask', question, history ?? []),
+  askQuestion: (question: string) =>
+    ipcRenderer.send('llm:ask', question),
   clearAnswer: () => ipcRenderer.send('llm:clear'),
   stopAnswer: () => ipcRenderer.send('llm:stop'),
 
@@ -66,10 +72,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('asr:stop', handler)
     return () => ipcRenderer.removeListener('asr:stop', handler)
   },
-  onAsrToggle: (cb: () => void): UnlistenFn => {
+  onAsrPttToggle: (cb: () => void): UnlistenFn => {
     const handler = () => cb()
-    ipcRenderer.on('asr:toggle', handler)
-    return () => ipcRenderer.removeListener('asr:toggle', handler)
+    ipcRenderer.on('asr:ptt-toggle', handler)
+    return () => ipcRenderer.removeListener('asr:ptt-toggle', handler)
   },
 
   // Main window listens for transcript updates
@@ -83,20 +89,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Main window controls ASR in overlay
   startListening: () => ipcRenderer.send('asr:start'),
   stopListening: () => ipcRenderer.send('asr:stop'),
-  setAsrLang: (lang: string) => ipcRenderer.send('asr:set-lang', lang),
-  setAudioSource: (source: 'mic' | 'system') => ipcRenderer.send('asr:set-source', source),
-
-  // Overlay listens for lang / source changes
-  onAsrLangChange: (cb: (lang: string) => void): UnlistenFn => {
-    const handler = (_e: Electron.IpcRendererEvent, lang: string) => cb(lang)
-    ipcRenderer.on('asr:lang-changed', handler)
-    return () => ipcRenderer.removeListener('asr:lang-changed', handler)
-  },
-  onAsrSourceChange: (cb: (source: string) => void): UnlistenFn => {
-    const handler = (_e: Electron.IpcRendererEvent, src: string) => cb(src)
-    ipcRenderer.on('asr:source-changed', handler)
-    return () => ipcRenderer.removeListener('asr:source-changed', handler)
-  },
 
   // Transcribe audio chunk via Whisper API (main process)
   transcribeChunk: (audio: ArrayBuffer, mimeType: string, lang: string): Promise<string> =>
@@ -113,7 +105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyText: (text: string) => ipcRenderer.send('clipboard:copy', text),
 
   // ── Screenshot / coding mode ─────────────────────────────────────────────────
-  submitScreenshot: (region: { x: number; y: number; w: number; h: number }) =>
+  submitScreenshot: (region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) =>
     ipcRenderer.send('screenshot:submit', region),
   cancelScreenshot: () => ipcRenderer.send('screenshot:cancel'),
 
@@ -137,6 +129,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('image:error', handler)
     return () => ipcRenderer.removeListener('image:error', handler)
   },
-  askExtractedText: (text: string, history?: { question: string; answer: string }[]) =>
-    ipcRenderer.send('llm:ask-extracted', text, history ?? [])
+  askExtractedText: (text: string) =>
+    ipcRenderer.send('llm:ask-extracted', text)
 })
