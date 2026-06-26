@@ -10,6 +10,8 @@ export interface LLMConfig {
   model: string
   visionModel: string
   jobDescription: string
+  // Custom instruction sent alongside the screenshot in direct-solve mode (⌘⌥S). Empty = default.
+  screenshotPrompt: string
 }
 
 const DEFAULT_CONFIG: LLMConfig = {
@@ -17,8 +19,12 @@ const DEFAULT_CONFIG: LLMConfig = {
   baseUrl: 'https://api.deepseek.com',
   model: 'deepseek-chat',
   visionModel: 'deepseek-chat',
-  jobDescription: ''
+  jobDescription: '',
+  screenshotPrompt: ''
 }
+
+// Used when screenshotPrompt is blank — the original built-in instruction.
+const DEFAULT_SCREENSHOT_PROMPT = '请解答这张截图里的题目。如果是代码/算法题，给出完整可运行的解法并简要说明思路。'
 
 // In-memory config, updated via IPC from main window
 let currentConfig: LLMConfig = { ...DEFAULT_CONFIG }
@@ -220,9 +226,10 @@ export function streamAnswer(question: string, overlayWindow: BrowserWindow): Pr
 // answer — one API round trip instead of OCR-then-ask (two). Used by the ⌘⌥S "直接解答" path.
 export function streamImageAnswer(imageBase64: string, overlayWindow: BrowserWindow): Promise<void> {
   const model = currentConfig.visionModel || currentConfig.model
+  const promptText = currentConfig.screenshotPrompt?.trim() || DEFAULT_SCREENSHOT_PROMPT
   return streamChat(
     model,
-    buildImageMessages(imageBase64, currentConfig.jobDescription, conversationHistory),
+    buildImageMessages(imageBase64, currentConfig.jobDescription, conversationHistory, promptText),
     '📷 截图解题',
     '[截图题目]',
     overlayWindow
@@ -331,14 +338,15 @@ function buildMessages(
 function buildImageMessages(
   imageBase64: string,
   jobDescription: string,
-  history: HistoryRound[] = []
+  history: HistoryRound[],
+  promptText: string
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   const messages = buildBaseMessages('你是一个专业的技术面试助手。下面给你一张题目截图，请先看懂图里的题目/代码，再用简洁、准确的中文作答。', jobDescription, history)
   messages.push({
     role: 'user',
     content: [
       { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
-      { type: 'text', text: '请解答这张截图里的题目。如果是代码/算法题，给出完整可运行的解法并简要说明思路。' }
+      { type: 'text', text: promptText }
     ]
   })
   return messages

@@ -8,6 +8,8 @@ interface LLMConfig {
   model: string
   visionModel: string
   jobDescription: string
+  // Custom prompt sent with the screenshot in direct-solve mode (⌘⌥S)
+  screenshotPrompt?: string
   // ASR (Whisper)
   asrApiKey: string
   asrBaseUrl: string

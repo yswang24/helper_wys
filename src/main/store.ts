@@ -14,6 +14,7 @@ interface PersistedConfig {
   overlayY?: number
   overlayOpacity?: number
   screenshotMode?: 'direct' | 'ocr'
+  screenshotPrompt?: string
 }
 
 // Secrets encrypted at rest via the OS keychain (macOS Keychain) using Electron safeStorage.

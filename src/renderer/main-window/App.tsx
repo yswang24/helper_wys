@@ -17,13 +17,14 @@ export function App() {
   const [needsSetup, setNeedsSetup] = useState(false)
 
   useEffect(() => {
-    const poll = () => { if (document.visibilityState === 'visible') window.electronAPI.getStatus().then(setStatus) }
-    poll()
-    // Skip polling while the window is hidden (⌘⌥M leaves it hidden but alive — backgroundThrottling
-    // is off for recording, so the timer wouldn't be throttled). Refresh immediately on re-show.
-    const t = setInterval(poll, 2000)
-    document.addEventListener('visibilitychange', poll)
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', poll) }
+    // Only static fields are shown now (version + failedShortcuts) — no live overlay status — so a
+    // mount fetch plus one delayed refetch (failedShortcuts is set during app startup, which can
+    // land just after this window mounts) replaces the old permanent 2s polling.
+    let cancelled = false
+    const fetchStatus = () => window.electronAPI.getStatus().then((s) => { if (!cancelled) setStatus(s) })
+    fetchStatus()
+    const t = setTimeout(fetchStatus, 1200)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [])
 
   // On first load, if no API key is saved, redirect to settings
@@ -49,10 +50,6 @@ export function App() {
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-white">Helper</div>
           <div className="text-xs" style={{ color: '#475569' }}>v{status?.version ?? '...'}</div>
-        </div>
-        <div className="flex gap-1.5">
-          <Pill ok={status?.contentProtection ?? false} label="隐身" />
-          <Pill ok={status?.overlayVisible ?? false} label="覆盖层" />
         </div>
       </div>
 
@@ -624,6 +621,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [asrModel, setAsrModel] = useState('whisper-1')
   const [overlayOpacity, setOverlayOpacity] = useState(0.94)
   const [screenshotMode, setScreenshotMode] = useState<'direct' | 'ocr'>('direct')
+  const [screenshotPrompt, setScreenshotPrompt] = useState('')
   const [saved, setSaved] = useState(false)
   const [saveErr, setSaveErr] = useState('')
   const [llmTest, setLlmTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
@@ -669,6 +667,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       if (cfg.asrModel) setAsrModel(cfg.asrModel)
       if (cfg.overlayOpacity !== undefined) setOverlayOpacity(cfg.overlayOpacity)
       if (cfg.screenshotMode) setScreenshotMode(cfg.screenshotMode)
+      if (cfg.screenshotPrompt !== undefined) setScreenshotPrompt(cfg.screenshotPrompt)
     })
   }, [])
 
@@ -679,7 +678,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
     try { new URL(baseUrl) } catch { setSaveErr('Base URL 需形如 https://api.example.com'); return }
     if (asrApiKey.trim()) { try { new URL(asrBaseUrl) } catch { setSaveErr('ASR Base URL 需形如 https://api.example.com'); return } }
     setSaveErr('')
-    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode })
+    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode, screenshotPrompt })
     setSaved(true)
     onSaved?.()
     setTimeout(() => setSaved(false), 2000)
@@ -741,6 +740,29 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
             </button>
           ))}
         </div>
+
+        {/* Custom prompt for direct-solve mode — sent with the image to the vision model */}
+        {screenshotMode === 'direct' && (
+          <div className="mt-2">
+            <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+              截图解答 Prompt（随图片发给视觉模型）
+            </label>
+            <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+              留空则用默认指令。可自定义解题风格。
+            </div>
+            <textarea
+              value={screenshotPrompt}
+              onChange={(e) => setScreenshotPrompt(e.target.value)}
+              onBlur={(e) => { e.target.style.borderColor = '#1e1e3a'; window.electronAPI.setConfig({ screenshotPrompt }) }}
+              placeholder="例如：分析并解答图片中的题目，先给出思路，再给出实现，优先 LeetCode 风格"
+              rows={3}
+              spellCheck={false}
+              className="w-full rounded-lg px-3 py-2 text-xs resize-none outline-none transition-colors"
+              style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#e2e8f0', lineHeight: '1.6', fontFamily: 'inherit' }}
+              onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
+            />
+          </div>
+        )}
       </div>
 
       {/* Divider */}
@@ -907,21 +929,6 @@ function TestRow({
         </span>
       )}
     </div>
-  )
-}
-
-function Pill({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <span
-      className="text-xs px-2 py-0.5 rounded-full"
-      style={{
-        background: ok ? 'rgba(22, 163, 74, 0.2)' : 'rgba(30, 30, 50, 0.6)',
-        color: ok ? '#4ade80' : '#334155',
-        border: `1px solid ${ok ? 'rgba(74, 222, 128, 0.3)' : 'rgba(50, 50, 80, 0.5)'}`
-      }}
-    >
-      {label}
-    </span>
   )
 }
 
