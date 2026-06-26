@@ -161,9 +161,9 @@ export function App() {
         if (id != null && prev.some((it) => it.id === id)) {
           return prev.map((it) => (it.id === id ? { ...it, status: 'error' as LLMStatus, errorMsg: message } : it))
         }
-        // No matching stream (e.g. empty-key error before any start, or an independent ⌘⌥O
-        // screenshot failure). Surface a standalone error item instead of dropping it. Negative
-        // id can't collide with main-process stream ids.
+        // No matching stream (e.g. an empty-key / "busy" error sent with id:null before any start).
+        // Surface a standalone error item instead of dropping it. Negative id can't collide with
+        // main-process stream ids.
         const synthId = -(nextIdRef.current++)
         const errItem = { id: synthId, question: '', answer: '', status: 'error' as LLMStatus, errorMsg: message }
         // If a stream is still live as the last item, keep IT last so the status bar / 停止 button

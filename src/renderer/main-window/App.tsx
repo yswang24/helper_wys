@@ -105,11 +105,8 @@ export function App() {
         style={{ borderColor: '#1e1e2e', color: '#334155' }}
       >
         <span><kbd className="font-mono">⌘⌥H</kbd> 覆盖层</span>
-        <span><kbd className="font-mono">⌘⌥M</kbd> 主窗口</span>
-        <span><kbd className="font-mono">⌘⌥K</kbd> 录音开关</span>
+        <span><kbd className="font-mono">⌘⌥X</kbd> 录音开关</span>
         <span><kbd className="font-mono">⌘⌥S</kbd> 截图解题</span>
-        <span><kbd className="font-mono">⌘⌥O</kbd> 截浮层</span>
-        <span><kbd className="font-mono">⌘⌥X</kbd> 清空</span>
       </div>
     </div>
   )
@@ -350,7 +347,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
       }
       streamRef.current = stream
       // Labels only appear post-permission — refresh so the picker becomes readable.
-      // Read via ref: this runs from a mount-time ⌘⌥K closure where `devices` would be stale [].
+      // Read via ref: this runs from a mount-time ⌘⌥X closure where `devices` would be stale [].
       if (devicesRef.current.some((d) => !d.label)) {
         navigator.mediaDevices.enumerateDevices()
           .then((l) => setDevices(l.filter((d) => d.kind === 'audioinput')))
@@ -359,7 +356,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus' : 'audio/webm'
 
-      // Manual bracketing: one continuous recording from ⌘⌥K-start to ⌘⌥K-stop, then
+      // Manual bracketing: one continuous recording from ⌘⌥X-start to ⌘⌥X-stop, then
       // transcribed in a single pass on stop. The user delimits the utterance — no VAD.
       const chunks: Blob[] = []
       const rec = new MediaRecorder(new MediaStream(stream.getAudioTracks()), { mimeType })
@@ -400,7 +397,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
       stream.getTracks().forEach((t) => {
         t.onended = () => {
           if (listeningRef.current) {
-            setError('音频设备已断开（蓝牙耳机？），录音已停止；重连后按 ⌘⌥K 重新开始。')
+            setError('音频设备已断开（蓝牙耳机？），录音已停止；重连后按 ⌘⌥X 重新开始。')
             stopCapture()
           }
         }
@@ -430,7 +427,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
     window.electronAPI.stopListening()
   }
 
-  // Toggle recording: ⌘⌥K pressed once = start, pressed again = stop.
+  // Toggle recording: ⌘⌥X pressed once = start, pressed again = stop.
   // listeningRef is the single source of truth — main process just sends a toggle nudge.
   // togglingRef guards the async start window so a fast double-press can't spawn two recorders.
   const togglingRef = useRef(false)
@@ -485,7 +482,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
 
       {/* System-audio guidance */}
       <div className="rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#7dd3fc' }}>
-        💡 想让 AI 听到<strong>对方的声音</strong>：装 BlackHole 虚拟声卡 → 在「音频 MIDI 设置」建一个含 BlackHole 的「多输出设备」并设为系统输出 → 下面选 BlackHole。仅选麦克风只会录到你自己。按 ⌘⌥K 开始/停止。
+        💡 想让 AI 听到<strong>对方的声音</strong>：装 BlackHole 虚拟声卡 → 在「音频 MIDI 设置」建一个含 BlackHole 的「多输出设备」并设为系统输出 → 下面选 BlackHole。仅选麦克风只会录到你自己。按 ⌘⌥X 开始/停止。
         <br />🎧 <strong>用蓝牙耳机</strong>：把耳机也加进上面的「多输出设备」（照常从耳机听），并设非蓝牙设备为主、给蓝牙开「漂移校正」。采集仍选 <strong>BlackHole</strong>，<strong>别选蓝牙耳机的麦克风</strong>。
       </div>
 
@@ -555,7 +552,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
           border: `1px solid ${listening ? 'rgba(220,38,38,0.4)' : '#1e1e2e'}`,
         }}
       >
-        {transcribing ? '⏳ 转写中…' : listening ? '● 录音中... 按 ⌘⌥K 停止' : '按 ⌘⌥K 开始录音'}
+        {transcribing ? '⏳ 转写中…' : listening ? '● 录音中... 按 ⌘⌥X 停止' : '按 ⌘⌥X 开始录音'}
       </div>
 
       {/* Editable draft area */}
@@ -581,7 +578,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
           value={draftText}
           onChange={(e) => setDraftText(e.target.value)}
           readOnly={listening}
-          placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 ⌘⌥K 录音，转写结果将出现在这里...'}
+          placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 ⌘⌥X 录音，转写结果将出现在这里...'}
           className="flex-1 rounded-lg p-3 text-xs leading-relaxed resize-none outline-none"
           style={{
             background: '#0a0a12',

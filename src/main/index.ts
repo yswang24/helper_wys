@@ -49,7 +49,7 @@ function createMainWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // 录音的 MediaRecorder 跑在本窗口里，而本窗口常被隐藏（⌘⌥M）。默认的后台节流会
+      // 录音的 MediaRecorder 跑在本窗口里，而本窗口常被隐藏（点 X 关闭即隐藏）。默认的后台节流会
       // 掐住隐藏窗口的编码管线，导致录到的音频近乎静音、Whisper 只回一个字。必须关掉。
       backgroundThrottling: false
     }
@@ -69,7 +69,7 @@ function createMainWindow(): void {
   // real progress. Re-registered on rebuild; cleared on close.
   setMainWindow(mainWindow)
 
-  // 点 X → 仅隐藏主窗口，应用继续在托盘后台运行；真正退出走托盘菜单或 ⌘⌥Q
+  // 点 X → 仅隐藏主窗口，应用继续在托盘后台运行；真正退出走托盘菜单
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault()
@@ -83,7 +83,7 @@ function createMainWindow(): void {
   })
 }
 
-// 统一的"把主窗口唤回前台"入口。Dock 图标点击、托盘点击、⌘⌥M 都走这里，
+// 统一的"把主窗口唤回前台"入口。Dock 图标点击、托盘点击 都走这里，
 // 保证 null/已销毁/屏幕外 三种边界都被处理。
 function restoreMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -358,30 +358,11 @@ app.whenReady().then(() => {
     updateTrayMenu()  // keep the tray label in sync with overlay visibility
   })
 
-  // ⌘⌥M — 切换主控制台窗口显隐
-  registerShortcut('CommandOrControl+Alt+M', () => {
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) mainWindow.hide()
-    else restoreMainWindow()  // null/已销毁时也能重建唤回
-  })
-
-  // ⌘⌥Q — 真正退出（关主窗口已改为隐藏）
-  registerShortcut('CommandOrControl+Alt+Q', () => {
-    isQuitting = true
-    app.quit()
-  })
-
-  // ⌘⌥X — clear answer (changed from C which conflicts with B站)
-  registerShortcut('CommandOrControl+Alt+X', () => {
-    stopStreaming()  // abort any in-flight stream so it doesn't keep generating into an empty UI
-    clearHistory()
-    overlayWindow?.webContents.send('llm:clear')
-  })
-
-  // Toggle ASR: ⌘⌥K starts/stops recording. The renderer (VoiceTab) is the single
+  // Toggle ASR: ⌘⌥X starts/stops recording. The renderer (VoiceTab) is the single
   // source of truth for "am I recording" — we just nudge it to flip. A main-side
   // boolean would drift out of sync whenever capture stops on its own (device
   // unplugged, failed start), inverting start/stop and misaligning the recorded clip.
-  registerShortcut('CommandOrControl+Alt+K', () => {
+  registerShortcut('CommandOrControl+Alt+X', () => {
     mainWindow?.webContents.send('asr:ptt-toggle')
   })
 
@@ -392,29 +373,6 @@ app.whenReady().then(() => {
       return
     }
     createSelectorWindow()
-  })
-
-  // Capture overlay window directly via capturePage() — bypasses content protection
-  registerShortcut('CommandOrControl+Alt+O', async () => {
-    if (!overlayWindow || overlayWindow.isDestroyed()) return
-    try {
-      ensureOverlayVisible()
-      const image = await overlayWindow.capturePage()
-      let captured: Electron.NativeImage = image
-      const maxSize = 2000
-      const { width, height } = captured.getSize()
-      if (width > maxSize || height > maxSize) {
-        const scale = maxSize / Math.max(width, height)
-        captured = captured.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
-      }
-      // JPEG: smaller base64 + faster encode than lossless PNG for screenshots → quicker upload.
-      const imageBase64 = captured.toJPEG(82).toString('base64')
-      console.log(`[OverlayCapture] captured: ${width}x${height}, size: ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
-      extractImageText(imageBase64, overlayWindow)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      overlayWindow.webContents.send('llm:error', { id: null, message: `overlay截图失败: ${msg}` })
-    }
   })
 })
 
