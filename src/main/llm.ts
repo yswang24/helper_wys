@@ -2,6 +2,7 @@ import OpenAI from 'openai'
 import type { BrowserWindow } from 'electron'
 import { describeApiError } from './apiError'
 import { VISION_PROBE_PNG_B64 } from './visionProbe'
+import { getOpenAIClient } from './openaiClient'
 
 export interface LLMConfig {
   apiKey: string
@@ -78,8 +79,16 @@ export function clearHistory(): void {
   conversationHistory.length = 0
 }
 
-export async function streamAnswer(
-  question: string,
+// Shared streaming core for both text questions and direct screenshot solving. Handles the full
+// per-stream lifecycle (id/generation tagging, abort, rolling-memory recording, overlay events)
+// so the two entry points only differ in the model + the messages they build.
+//   historyQuestion — what to store as the "question" side of the rolling memory round (a label
+//   like "[截图题目]" for image solves, since the real prompt is an image, not text).
+async function streamChat(
+  model: string,
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  questionLabel: string,
+  historyQuestion: string,
   overlayWindow: BrowserWindow
 ): Promise<void> {
   if (!currentConfig.apiKey) {
@@ -92,24 +101,20 @@ export async function streamAnswer(
     return
   }
 
-  const client = new OpenAI({
-    apiKey: currentConfig.apiKey,
-    baseURL: currentConfig.baseUrl,
-    dangerouslyAllowBrowser: true
-  })
+  const client = getOpenAIClient({ apiKey: currentConfig.apiKey, baseURL: currentConfig.baseUrl })
 
   const id = nextStreamId++
   const myGen = ++streamGen
   const abort = new AbortController()
   activeAbort = abort
   isStreaming = true
-  safeSend(overlayWindow, 'llm:start', { id, question })
+  safeSend(overlayWindow, 'llm:start', { id, question: questionLabel })
 
   try {
     const stream = await client.chat.completions.create(
       {
-        model: currentConfig.model,
-        messages: buildMessages(question, currentConfig.jobDescription, conversationHistory),
+        model,
+        messages,
         stream: true,
         max_tokens: 2000,
         temperature: 0.7
@@ -130,7 +135,7 @@ export async function streamAnswer(
     // swallows mid-stream aborts (loop ends normally), so guard on the signal — otherwise a
     // truncated partial answer pollutes the rolling context fed into later prompts.
     if (!abort.signal.aborted && fullAnswer.trim()) {
-      conversationHistory.push({ question, answer: fullAnswer })
+      conversationHistory.push({ question: historyQuestion, answer: fullAnswer })
       if (conversationHistory.length > MAX_HISTORY_ROUNDS) {
         conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY_ROUNDS)
       }
@@ -143,7 +148,7 @@ export async function streamAnswer(
       safeSend(overlayWindow, 'llm:done', { id })  // treat user-stop as done
     } else {
       const msg = err instanceof Error ? err.message : String(err)
-      safeSend(overlayWindow, 'llm:error', { id, message: `${msg}\n[URL: ${currentConfig.baseUrl}, 模型: ${currentConfig.model}]` })
+      safeSend(overlayWindow, 'llm:error', { id, message: `${msg}\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]` })
     }
   } finally {
     if (myGen === streamGen) {
@@ -151,6 +156,29 @@ export async function streamAnswer(
       activeAbort = null
     }
   }
+}
+
+export function streamAnswer(question: string, overlayWindow: BrowserWindow): Promise<void> {
+  return streamChat(
+    currentConfig.model,
+    buildMessages(question, currentConfig.jobDescription, conversationHistory),
+    question,
+    question,
+    overlayWindow
+  )
+}
+
+// Direct screenshot solving: feed the cropped image straight to the vision model and STREAM the
+// answer — one API round trip instead of OCR-then-ask (two). Used by the ⌘⌥S "直接解答" path.
+export function streamImageAnswer(imageBase64: string, overlayWindow: BrowserWindow): Promise<void> {
+  const model = currentConfig.visionModel || currentConfig.model
+  return streamChat(
+    model,
+    buildImageMessages(imageBase64, currentConfig.jobDescription, conversationHistory),
+    '📷 截图解题',
+    '[截图题目]',
+    overlayWindow
+  )
 }
 
 export async function extractImageText(
@@ -162,12 +190,8 @@ export async function extractImageText(
     return
   }
 
-  const client = new OpenAI({
-    apiKey: currentConfig.apiKey,
-    baseURL: currentConfig.baseUrl,
-    dangerouslyAllowBrowser: true,
-    maxRetries: 0 // fail fast — don't let SDK retries hang the "识别中" status for minutes
-  })
+  // maxRetries: 0 — fail fast; don't let SDK retries hang the "识别中" status for minutes
+  const client = getOpenAIClient({ apiKey: currentConfig.apiKey, baseURL: currentConfig.baseUrl, maxRetries: 0 })
 
   const useModel = currentConfig.visionModel || currentConfig.model
   console.log(`[ImageOCR] model=${useModel}, baseURL=${currentConfig.baseUrl}, imageSize=${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
@@ -213,33 +237,52 @@ export async function extractImageText(
   }
 }
 
-function buildMessages(
-  question: string,
-  jobDescription: string,
-  history: HistoryRound[] = []
-): OpenAI.Chat.ChatCompletionMessageParam[] {
-  let systemContent = `你是一个专业的技术面试助手。请用简洁、准确的中文回答面试问题。
-
-回答要求：
+const ANSWER_RULES = `回答要求：
 - 抓住重点，不要过于冗长
 - 技术问题给出代码示例（用 markdown 代码块标注语言）
 - 多点并列时用数字列表
 - 回答控制在合理长度`
 
+// System prompt + replayed rolling memory, shared by the text and image entry points.
+// The caller appends the final user turn (text or image) to the returned array.
+function buildBaseMessages(intro: string, jobDescription: string, history: HistoryRound[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+  let systemContent = `${intro}\n\n${ANSWER_RULES}`
   if (jobDescription.trim()) {
     systemContent += `\n\n【应聘岗位描述】\n${jobDescription.trim()}`
   }
-
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemContent }
   ]
-
   for (const round of history) {
     messages.push({ role: 'user', content: round.question })
     messages.push({ role: 'assistant', content: round.answer })
   }
+  return messages
+}
 
+function buildMessages(
+  question: string,
+  jobDescription: string,
+  history: HistoryRound[] = []
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const messages = buildBaseMessages('你是一个专业的技术面试助手。请用简洁、准确的中文回答面试问题。', jobDescription, history)
   messages.push({ role: 'user', content: question })
+  return messages
+}
+
+function buildImageMessages(
+  imageBase64: string,
+  jobDescription: string,
+  history: HistoryRound[] = []
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const messages = buildBaseMessages('你是一个专业的技术面试助手。下面给你一张题目截图，请先看懂图里的题目/代码，再用简洁、准确的中文作答。', jobDescription, history)
+  messages.push({
+    role: 'user',
+    content: [
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
+      { type: 'text', text: '请解答这张截图里的题目。如果是代码/算法题，给出完整可运行的解法并简要说明思路。' }
+    ]
+  })
   return messages
 }
 
@@ -251,7 +294,7 @@ export async function testLLMConnection(
 ): Promise<{ ok: boolean; message: string }> {
   if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
   if (!cfg.model) return { ok: false, message: '请先填写模型名' }
-  const client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, dangerouslyAllowBrowser: true, maxRetries: 0 })
+  const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
   const start = Date.now()
   try {
     const r = await client.chat.completions.create(
@@ -272,7 +315,7 @@ export async function testVisionConnection(
 ): Promise<{ ok: boolean; message: string }> {
   if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
   if (!cfg.visionModel) return { ok: false, message: '请先填写视觉模型名' }
-  const client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, dangerouslyAllowBrowser: true, maxRetries: 0 })
+  const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
   const start = Date.now()
   try {
     const r = await client.chat.completions.create(

@@ -14,6 +14,9 @@ interface LLMConfig {
   asrModel: string
   // Overlay appearance
   overlayOpacity?: number
+  // Screenshot (⌘⌥S): 'direct' = vision model streams the answer in one call; 'ocr' = extract
+  // editable text first, then send to the LLM.
+  screenshotMode?: 'direct' | 'ocr'
 }
 
 interface AppStatus {

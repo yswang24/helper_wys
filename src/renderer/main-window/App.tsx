@@ -578,6 +578,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [asrBaseUrl, setAsrBaseUrl] = useState('https://api.openai.com/v1')
   const [asrModel, setAsrModel] = useState('whisper-1')
   const [overlayOpacity, setOverlayOpacity] = useState(0.94)
+  const [screenshotMode, setScreenshotMode] = useState<'direct' | 'ocr'>('direct')
   const [saved, setSaved] = useState(false)
   const [llmTest, setLlmTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
   const [visionTest, setVisionTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
@@ -621,11 +622,12 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       if (cfg.asrBaseUrl) setAsrBaseUrl(cfg.asrBaseUrl)
       if (cfg.asrModel) setAsrModel(cfg.asrModel)
       if (cfg.overlayOpacity !== undefined) setOverlayOpacity(cfg.overlayOpacity)
+      if (cfg.screenshotMode) setScreenshotMode(cfg.screenshotMode)
     })
   }, [])
 
   const save = () => {
-    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity })
+    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode })
     setSaved(true)
     onSaved?.()
     setTimeout(() => setSaved(false), 2000)
@@ -658,6 +660,35 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           className="w-full"
           style={{ accentColor: '#3b82f6' }}
         />
+      </div>
+
+      {/* Screenshot mode */}
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          截图解题模式（⌘⌥S）
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          {screenshotMode === 'direct'
+            ? '直接解答：视觉模型一次调用直接流式给出答案，最快'
+            : '先识别：先 OCR 出可编辑文字，确认/纠错后再发给 AI'}
+        </div>
+        <div className="flex gap-2">
+          {([['direct', '直接解答（快）'], ['ocr', '先识别可编辑']] as ['direct' | 'ocr', string][]).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => { setScreenshotMode(m); window.electronAPI.setConfig({ screenshotMode: m }) }}
+              className="px-3 py-1 text-xs rounded transition-colors"
+              style={{
+                background: screenshotMode === m ? '#1d4ed8' : '#1e1e2e',
+                color: screenshotMode === m ? '#bfdbfe' : '#475569',
+                border: `1px solid ${screenshotMode === m ? '#3b82f6' : '#2d2d44'}`,
+                cursor: 'pointer'
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Divider */}

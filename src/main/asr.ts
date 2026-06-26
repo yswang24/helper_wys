@@ -1,10 +1,10 @@
-import OpenAI from 'openai'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { writeFileSync, unlinkSync, createReadStream } from 'fs'
 import { randomBytes } from 'crypto'
 import { isHallucinatedText } from '../shared/hallucination'
 import { describeApiError } from './apiError'
+import { getOpenAIClient } from './openaiClient'
 
 export interface ASRConfig {
   apiKey: string
@@ -35,11 +35,7 @@ export async function transcribeAudio(
 ): Promise<string> {
   if (!config.apiKey) throw new Error('请先在设置中填写语音识别 API Key')
 
-  const client = new OpenAI({
-    apiKey: config.apiKey,
-    baseURL: config.baseUrl,
-    dangerouslyAllowBrowser: true
-  })
+  const client = getOpenAIClient({ apiKey: config.apiKey, baseURL: config.baseUrl })
 
   const ext = mimeType.includes('webm') ? 'webm'
     : mimeType.includes('ogg') ? 'ogg'
@@ -103,7 +99,7 @@ export async function testASRConnection(
 ): Promise<{ ok: boolean; message: string }> {
   if (!cfg.apiKey) return { ok: false, message: '请先填写 ASR API Key' }
   if (!cfg.model) return { ok: false, message: '请先填写 ASR 模型名' }
-  const client = new OpenAI({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, dangerouslyAllowBrowser: true, maxRetries: 0 })
+  const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
   const tmpFile = join(tmpdir(), `iatest_${randomBytes(4).toString('hex')}.wav`)
   writeFileSync(tmpFile, makeProbeWav())
   const start = Date.now()

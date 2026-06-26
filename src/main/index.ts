@@ -4,7 +4,7 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection } from './llm'
+import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
@@ -447,6 +447,7 @@ ipcMain.handle('config:get', () => {
     asrBaseUrl: asr.baseUrl,
     asrModel: asr.model,
     overlayOpacity: persisted.overlayOpacity ?? 0.94,
+    screenshotMode: persisted.screenshotMode ?? 'direct',
   }
 })
 
@@ -454,8 +455,10 @@ ipcMain.on('config:set', (_e, partial) => {
   const p = partial as Record<string, unknown>
   // Log only field names — never the values (would leak API keys)
   console.log('[Config] received keys:', Object.keys(p).join(', '))
-  // Update in-memory configs for immediate use
-  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, ...llmPartial } = p
+  // Update in-memory configs for immediate use. screenshotMode is a main-process behavior flag,
+  // not an LLM param — pull it out of llmPartial so it never leaks into the LLM config; it's
+  // read straight from the persisted file in the screenshot handler.
+  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode: _screenshotMode, ...llmPartial } = p
   if (Object.keys(llmPartial).length) setConfig(llmPartial as Record<string, string>)
   if (asrApiKey !== undefined || asrBaseUrl !== undefined || asrModel !== undefined) {
     const cur = getASRConfig()
@@ -495,17 +498,22 @@ function waitForStreamEnd(callback: () => void): void {
   tick()
 }
 
-ipcMain.on('llm:ask', (_e, question: string) => {
-  if (!overlayWindow) return
-  // Re-check at call time: when deferred via waitForStreamEnd (up to ~4s) the overlay could be
-  // gone by the time start() runs, and streamAnswer would deref a destroyed window.
-  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) streamAnswer(question, overlayWindow) }
+// Begin a new stream, first draining any in-flight one. `run` is re-guarded at call time because
+// waitForStreamEnd can defer it up to ~4s, by which point the overlay may have been destroyed —
+// streaming into a dead window would throw.
+function startStreamSafely(run: (win: BrowserWindow) => void): void {
+  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) run(overlayWindow) }
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
-    return
+  } else {
+    start()
   }
-  start()
+}
+
+ipcMain.on('llm:ask', (_e, question: string) => {
+  if (!overlayWindow) return
+  startStreamSafely((win) => streamAnswer(question, win))
 })
 
 ipcMain.on('llm:clear', () => {
@@ -521,13 +529,7 @@ ipcMain.on('llm:stop', () => {
 // Overlay sends extracted text → LLM answers
 ipcMain.on('llm:ask-extracted', (_e, text: string) => {
   if (!overlayWindow) return
-  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) streamAnswer(text, overlayWindow) }
-  if (isCurrentlyStreaming()) {
-    stopStreaming()
-    waitForStreamEnd(start)
-  } else {
-    start()
-  }
+  startStreamSafely((win) => streamAnswer(text, win))
 })
 
 // ── IPC: ASR control (main window → overlay) ──────────────────────────────────
@@ -544,13 +546,7 @@ ipcMain.on('asr:transcript', (_e, data: { text: string; isFinal: boolean }) => {
 // Overlay asks main to auto-submit a transcribed question to LLM
 ipcMain.on('asr:auto-ask', (_e, question: string) => {
   if (!overlayWindow) return
-  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) streamAnswer(question, overlayWindow) }
-  if (isCurrentlyStreaming()) {
-    stopStreaming()
-    waitForStreamEnd(start)
-    return
-  }
-  start()
+  startStreamSafely((win) => streamAnswer(question, win))
 })
 
 // Overlay sends audio chunk → Whisper API → returns text
@@ -622,8 +618,14 @@ ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: nu
     const imageBase64 = cropped.toPNG().toString('base64')
     console.log(`[Screenshot] region ${region.w}x${region.h} → ${cropped.getSize().width}x${cropped.getSize().height}, thumb ${tsize.width}x${tsize.height}, ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
 
-    // Step 1: Extract text from image via vision model
-    extractImageText(imageBase64, overlayWindow)
+    // 'direct' (default): one call — vision model streams the answer straight to the overlay.
+    // 'ocr': two calls — extract editable text first, user reviews, then sends to the LLM.
+    const mode = loadPersistedConfig().screenshotMode ?? 'direct'
+    if (mode === 'ocr') {
+      extractImageText(imageBase64, overlayWindow)
+    } else {
+      startStreamSafely((win) => streamImageAnswer(imageBase64, win))
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     overlayWindow?.webContents.send('image:error', `截图失败: ${msg}`)

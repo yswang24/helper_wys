@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, memo } from 'react'
 
 type LLMStatus = 'idle' | 'streaming' | 'done' | 'error'
 
@@ -121,16 +121,40 @@ export function App() {
   // Every event carries the main-process stream id, so chunks/done/error attach to the RIGHT
   // bubble even when streams overlap — instead of blindly mutating the last item.
   useEffect(() => {
+    // Chunks arrive token-by-token. Buffering them and flushing once per animation frame turns
+    // N setState+markdown-reparse per token into one per frame — the streaming-render win. The
+    // updater stays pure (appends to prev from a const snapshot) so it's StrictMode-safe.
+    const chunkBuf = new Map<number, string>()
+    let flushScheduled = false
+    const flush = () => {
+      flushScheduled = false
+      if (chunkBuf.size === 0) return
+      const deltas = Array.from(chunkBuf.entries())
+      chunkBuf.clear()
+      setHistory((prev) => prev.map((it) => {
+        const d = deltas.find(([id]) => id === it.id)
+        return d ? { ...it, answer: it.answer + d[1] } : it
+      }))
+    }
+    const scheduleFlush = () => {
+      if (flushScheduled) return
+      flushScheduled = true
+      requestAnimationFrame(flush)
+    }
+
     const unStart = window.electronAPI.onAnswerStart(({ id, question }) => {
       setHistory((prev) => [...prev, { id, question, answer: '', status: 'streaming', errorMsg: '' }])
     })
     const unChunk = window.electronAPI.onAnswerChunk(({ id, chunk }) => {
-      setHistory((prev) => prev.map((it) => (it.id === id ? { ...it, answer: it.answer + chunk } : it)))
+      chunkBuf.set(id, (chunkBuf.get(id) ?? '') + chunk)
+      scheduleFlush()
     })
     const unDone = window.electronAPI.onAnswerDone(({ id }) => {
+      flush()  // apply any buffered trailing text before marking done
       setHistory((prev) => prev.map((it) => (it.id === id ? { ...it, status: 'done' as LLMStatus } : it)))
     })
     const unError = window.electronAPI.onAnswerError(({ id, message }) => {
+      flush()  // preserve any buffered partial answer before switching the bubble to error
       setHistory((prev) => {
         if (id != null && prev.some((it) => it.id === id)) {
           return prev.map((it) => (it.id === id ? { ...it, status: 'error' as LLMStatus, errorMsg: message } : it))
@@ -150,6 +174,8 @@ export function App() {
       })
     })
     const unClear = window.electronAPI.onAnswerClear(() => {
+      chunkBuf.clear()
+      flushScheduled = false
       setHistory([])
     })
     return () => { unStart(); unChunk(); unDone(); unError(); unClear() }
@@ -176,10 +202,11 @@ export function App() {
     return () => { unStatus(); unText(); unError() }
   }, [])
 
-  // Auto-scroll to latest answer
+  // Auto-scroll to latest answer. Instant ('auto'), not 'smooth': during streaming this fires
+  // once per frame, and smooth animations would stack and fight each other into visible jank.
   const lastAnswer = history.length > 0 ? history[history.length - 1].answer : ''
   useEffect(() => {
-    answerEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    answerEndRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [lastAnswer])
 
   // Mouse pass-through is now handled by main process cursor polling (index.ts)
@@ -355,35 +382,7 @@ export function App() {
             </div>
           )}
           {history.map((item, idx) => (
-            <div key={item.id} className="mb-4">
-              {/* Question (omitted for standalone error items that have no question) */}
-              {item.question && (
-                <div
-                  className="px-3 py-2 border-b flex-shrink-0 mb-2"
-                  style={{ borderColor: 'rgba(50, 50, 80, 0.4)', background: 'rgba(15, 15, 28, 0.5)' }}
-                >
-                  <div className="text-xs" style={{ color: '#475569' }}>问题</div>
-                  <div className="text-xs mt-0.5 leading-relaxed" style={{ color: '#64748b' }}>
-                    {item.question}
-                  </div>
-                </div>
-              )}
-
-              {/* Answer */}
-              {item.status === 'error' && (
-                <div
-                  className="text-xs rounded-lg p-2"
-                  style={{ background: 'rgba(120, 20, 20, 0.4)', color: '#f87171' }}
-                >
-                  ⚠ {item.errorMsg}
-                </div>
-              )}
-              {item.answer && <AnswerText text={item.answer} streaming={item.status === 'streaming'} />}
-
-              {idx < history.length - 1 && (
-                <div className="mt-3 pt-3 border-t" style={{ borderColor: 'rgba(50, 50, 80, 0.3)' }} />
-              )}
-            </div>
+            <HistoryItemView key={item.id} item={item} showDivider={idx < history.length - 1} />
           ))}
           <div ref={answerEndRef} />
         </div>
@@ -553,6 +552,44 @@ function CopyButton({ text }: { text: string }) {
     </button>
   )
 }
+
+// ── One question/answer row ─────────────────────────────────────────────────────
+// memo'd so that while the LATEST answer streams (its `item` ref changes every frame), the
+// already-finished rows above it keep the same `item` reference and skip re-rendering — no
+// re-parsing their markdown on every chunk flush. Only the live row re-renders per frame.
+const HistoryItemView = memo(function HistoryItemView({ item, showDivider }: { item: HistoryItem; showDivider: boolean }) {
+  return (
+    <div className="mb-4">
+      {/* Question (omitted for standalone error items that have no question) */}
+      {item.question && (
+        <div
+          className="px-3 py-2 border-b flex-shrink-0 mb-2"
+          style={{ borderColor: 'rgba(50, 50, 80, 0.4)', background: 'rgba(15, 15, 28, 0.5)' }}
+        >
+          <div className="text-xs" style={{ color: '#475569' }}>问题</div>
+          <div className="text-xs mt-0.5 leading-relaxed" style={{ color: '#64748b' }}>
+            {item.question}
+          </div>
+        </div>
+      )}
+
+      {/* Answer */}
+      {item.status === 'error' && (
+        <div
+          className="text-xs rounded-lg p-2"
+          style={{ background: 'rgba(120, 20, 20, 0.4)', color: '#f87171' }}
+        >
+          ⚠ {item.errorMsg}
+        </div>
+      )}
+      {item.answer && <AnswerText text={item.answer} streaming={item.status === 'streaming'} />}
+
+      {showDivider && (
+        <div className="mt-3 pt-3 border-t" style={{ borderColor: 'rgba(50, 50, 80, 0.3)' }} />
+      )}
+    </div>
+  )
+})
 
 // ── Answer renderer ───────────────────────────────────────────────────────────
 function AnswerText({ text, streaming }: { text: string; streaming: boolean }) {
