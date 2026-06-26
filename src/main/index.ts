@@ -1,11 +1,14 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, session, desktopCapturer, screen, clipboard, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, session, desktopCapturer, screen, clipboard, Tray, Menu, nativeImage, systemPreferences } from 'electron'
 import { join } from 'path'
+import { tmpdir } from 'os'
+import { execFile } from 'child_process'
+import { unlink } from 'fs/promises'
 import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection } from './llm'
-import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection } from './asr'
+import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection, setMainWindow } from './llm'
+import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 
 let mainWindow: BrowserWindow | null = null
@@ -62,6 +65,9 @@ function createMainWindow(): void {
   // Invisible to screen capture as well (safety net)
   mainWindow.setContentProtection(true)
   hardenWebContents(mainWindow)
+  // Let llm.ts mirror stream lifecycle (start/done/error) here so the Ask tab button tracks
+  // real progress. Re-registered on rebuild; cleared on close.
+  setMainWindow(mainWindow)
 
   // 点 X → 仅隐藏主窗口，应用继续在托盘后台运行；真正退出走托盘菜单或 ⌘⌥Q
   mainWindow.on('close', (e) => {
@@ -73,6 +79,7 @@ function createMainWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    setMainWindow(null)
   })
 }
 
@@ -98,6 +105,44 @@ function restoreMainWindow(): void {
   })
   mainWindow.show()
   mainWindow.focus()
+}
+
+// Rebuild the tray menu so its overlay show/hide label matches current visibility. Module-level
+// (was a whenReady closure) so ensureOverlayVisible and the shortcuts can all call it.
+function updateTrayMenu(): void {
+  if (!tray) return
+  const menu = Menu.buildFromTemplate([
+    {
+      label: overlayWindow?.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
+      click: () => {
+        if (overlayWindow?.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
+        else { overlayUserVisible = true; overlayWindow?.show() }
+        updateTrayMenu()
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true
+        app.quit()
+      }
+    }
+  ])
+  tray.setContextMenu(menu)
+}
+
+// Make sure answers are actually seen: if the overlay is hidden (user pressed ⌘⌥H, or the OS hid
+// it) when a stream/OCR starts, the answer would stream into nothing — the heartbeat only auto-
+// restores when overlayUserVisible is already true. Pull it back up before any answer begins.
+function ensureOverlayVisible(): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  if (!overlayWindow.isVisible()) {
+    overlayUserVisible = true
+    overlayWindow.show()
+    overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+    updateTrayMenu()
+  }
 }
 
 function createOverlayWindow(): void {
@@ -216,6 +261,9 @@ app.whenReady().then(() => {
   // the Dock icon. Asserting the policy up front + re-asserting after capture keeps it stable.
   if (process.platform === 'darwin') app.setActivationPolicy('regular')
 
+  // Sweep any temp audio a previous run left behind (killed mid-transcribe, or old builds).
+  cleanupStaleTempAudio()
+
   // Restore user settings from disk
   const saved = loadPersistedConfig()
   if (Object.keys(saved).length) setConfig(saved)
@@ -267,36 +315,14 @@ app.whenReady().then(() => {
       overlayWindow.setIgnoreMouseEvents(shouldIgnore, { forward: true })
       lastIgnoreState = shouldIgnore
     }
-  }, 50)
+  }, 100)  // 10Hz: pass-through/restore latency stays imperceptible while halving idle wakeups
 
   // ── System tray ──────────────────────────────────────────────────────────────
   const iconPath = join(__dirname, '../../resources/icon.png')
   const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
   tray = new Tray(trayIcon)
   tray.setToolTip('Helper')
-
-  const updateTrayMenu = () => {
-    const menu = Menu.buildFromTemplate([
-      {
-        label: overlayWindow?.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
-        click: () => {
-          if (overlayWindow?.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
-          else { overlayUserVisible = true; overlayWindow?.show() }
-          updateTrayMenu()  // rebuild so the label reflects the new visibility
-        }
-      },
-      { type: 'separator' },
-      {
-        label: '退出',
-        click: () => {
-          isQuitting = true
-          app.quit()
-        }
-      }
-    ])
-    tray?.setContextMenu(menu)
-  }
-  updateTrayMenu()
+  updateTrayMenu()  // updateTrayMenu is module-level (see above)
 
   tray.on('click', () => {
     restoreMainWindow()
@@ -372,6 +398,7 @@ app.whenReady().then(() => {
   registerShortcut('CommandOrControl+Alt+O', async () => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
     try {
+      ensureOverlayVisible()
       const image = await overlayWindow.capturePage()
       let captured: Electron.NativeImage = image
       const maxSize = 2000
@@ -380,7 +407,8 @@ app.whenReady().then(() => {
         const scale = maxSize / Math.max(width, height)
         captured = captured.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
       }
-      const imageBase64 = captured.toPNG().toString('base64')
+      // JPEG: smaller base64 + faster encode than lossless PNG for screenshots → quicker upload.
+      const imageBase64 = captured.toJPEG(82).toString('base64')
       console.log(`[OverlayCapture] captured: ${width}x${height}, size: ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
       extractImageText(imageBase64, overlayWindow)
     } catch (err) {
@@ -438,6 +466,7 @@ ipcMain.handle('config:test-asr', (_e, cfg: { apiKey: string; baseUrl: string; m
   testASRConnection(cfg)
 )
 
+// Full config incl. plaintext API keys — for the SETTINGS form (main window) to echo back.
 ipcMain.handle('config:get', () => {
   const asr = getASRConfig()
   const persisted = loadPersistedConfig()
@@ -446,6 +475,16 @@ ipcMain.handle('config:get', () => {
     asrApiKey: asr.apiKey,
     asrBaseUrl: asr.baseUrl,
     asrModel: asr.model,
+    overlayOpacity: persisted.overlayOpacity ?? 0.94,
+    screenshotMode: persisted.screenshotMode ?? 'direct',
+  }
+})
+
+// Secret-free subset for non-settings windows (the overlay only needs appearance). Keeps the
+// plaintext API keys out of the overlay renderer's memory — least privilege.
+ipcMain.handle('config:get-public', () => {
+  const persisted = loadPersistedConfig()
+  return {
     overlayOpacity: persisted.overlayOpacity ?? 0.94,
     screenshotMode: persisted.screenshotMode ?? 'direct',
   }
@@ -473,13 +512,16 @@ ipcMain.on('config:set', (_e, partial) => {
   }
   // Persist via read-modify-write: only overwrite fields actually provided, so a
   // partial update (e.g. the opacity slider) can never blank out a saved API key.
+  // jobDescription is never persisted, so a JD-only update (fires on every typing pause)
+  // would otherwise trigger a full file read-modify-rewrite with identical content — skip it.
+  let persistChanged = false
   const merged = loadPersistedConfig() as Record<string, unknown>
   for (const k of Object.keys(p)) {
     if (k === 'jobDescription') continue
-    if (p[k] !== undefined) merged[k] = p[k]
+    if (p[k] !== undefined) { merged[k] = p[k]; persistChanged = true }
   }
-  if (overlayOpacity !== undefined) merged.overlayOpacity = Number(overlayOpacity)
-  persistConfig(merged as Parameters<typeof persistConfig>[0])
+  if (overlayOpacity !== undefined) { merged.overlayOpacity = Number(overlayOpacity); persistChanged = true }
+  if (persistChanged) persistConfig(merged as Parameters<typeof persistConfig>[0])
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
@@ -502,7 +544,12 @@ function waitForStreamEnd(callback: () => void): void {
 // waitForStreamEnd can defer it up to ~4s, by which point the overlay may have been destroyed —
 // streaming into a dead window would throw.
 function startStreamSafely(run: (win: BrowserWindow) => void): void {
-  const start = () => { if (overlayWindow && !overlayWindow.isDestroyed()) run(overlayWindow) }
+  const start = () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      ensureOverlayVisible()  // a hidden overlay would otherwise swallow the whole answer silently
+      run(overlayWindow)
+    }
+  }
   if (isCurrentlyStreaming()) {
     stopStreaming()
     waitForStreamEnd(start)
@@ -562,66 +609,123 @@ ipcMain.on('clipboard:copy', (_e, text: string) => {
 
 // ── IPC: screenshot / coding mode ────────────────────────────────────────────
 
-ipcMain.on('screenshot:submit', async (_e, region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) => {
+type ScreenRegion = { x: number; y: number; w: number; h: number; vw?: number; vh?: number }
+
+// macOS native region capture: screencapture grabs ONLY the requested rect, so we avoid rendering
+// the entire screen at retina resolution and then cropping (the desktopCapturer cost). Coordinates
+// are global logical points; the selector's viewport (vw/vh) is mapped to the display's logical
+// bounds in case they differ (notched/scaled Macs). Returns base64 JPEG.
+async function captureRegionNative(display: Electron.Display, region: ScreenRegion): Promise<string> {
+  const vw = region.vw || display.bounds.width
+  const vh = region.vh || display.bounds.height
+  const sx = display.bounds.width / vw
+  const sy = display.bounds.height / vh
+  const gx = Math.round(display.bounds.x + region.x * sx)
+  const gy = Math.round(display.bounds.y + region.y * sy)
+  const gw = Math.max(1, Math.round(region.w * sx))
+  const gh = Math.max(1, Math.round(region.h * sy))
+  const tmpPng = join(tmpdir(), `helper_shot_${Date.now()}.png`)
+  console.log(`[Screenshot] native -R ${gw}x${gh}@${gx},${gy}`)
+  // The await is INSIDE the try so the finally still unlinks if screencapture exits non-zero after
+  // writing a partial/0-byte file (otherwise those orphans accumulate in tmpdir on every failure).
+  try {
+    await new Promise<void>((resolve, reject) => {
+      // Absolute path: a packaged GUI app's PATH may not include /usr/sbin. -x = silent, -R = region.
+      execFile('/usr/sbin/screencapture', ['-x', '-R', `${gx},${gy},${gw},${gh}`, tmpPng], (err) =>
+        err ? reject(err) : resolve()
+      )
+    })
+    let img = nativeImage.createFromPath(tmpPng)
+    if (img.isEmpty()) throw new Error('screencapture 输出为空')
+    const maxSize = 2000
+    const { width, height } = img.getSize()
+    if (width > maxSize || height > maxSize) {
+      const scale = maxSize / Math.max(width, height)
+      img = img.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
+    }
+    return img.toJPEG(82).toString('base64')
+  } finally {
+    unlink(tmpPng).catch(() => { /* ignore */ })
+  }
+}
+
+// Cross-platform fallback: full-screen desktopCapturer thumbnail, then crop to the selection.
+// Returns base64 JPEG.
+async function captureRegionDesktop(display: Electron.Display, region: ScreenRegion): Promise<string> {
+  const { width, height } = display.bounds  // logical pixels (same space as selector coords)
+  // Timeout guard — desktopCapturer can hang on macOS without screen recording permission
+  const capturePromise = desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: Math.round(width * display.scaleFactor), height: Math.round(height * display.scaleFactor) }
+  })
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('截图超时，请检查屏幕录制权限')), 10000)
+  )
+  const sources = await Promise.race([capturePromise, timeoutPromise])
+  // Pick the source matching our display — desktopCapturer doesn't guarantee sources[0] is it.
+  const source = sources.find((s) => String(s.display_id) === String(display.id)) ?? sources[0]
+  if (!source) throw new Error('无法获取屏幕截图')
+  const thumb = source.thumbnail
+  const tsize = thumb.getSize()
+  if (tsize.width === 0 || tsize.height === 0) {
+    throw new Error('截屏内容为空 —— 请到 系统设置 → 隐私与安全性 → 屏幕录制，给运行本应用的程序（开发时是终端/VS Code，打包后是 Helper）授权后重启')
+  }
+  // Map selector(viewport) coords → thumbnail pixels using the selector's OWN reported viewport
+  // size. display.bounds can differ from the actual viewport on notched/scaled Macs.
+  const vw = region.vw || width
+  const vh = region.vh || height
+  const scaleX = tsize.width / vw
+  const scaleY = tsize.height / vh
+  const cx = Math.max(0, Math.round(region.x * scaleX))
+  const cy = Math.max(0, Math.round(region.y * scaleY))
+  const cw = Math.min(Math.round(region.w * scaleX), tsize.width - cx)
+  const ch = Math.min(Math.round(region.h * scaleY), tsize.height - cy)
+  let cropped = thumb.crop({ x: cx, y: cy, width: cw, height: ch })
+  const maxSize = 2000
+  const cropW = cropped.getSize().width
+  const cropH = cropped.getSize().height
+  if (cropW > maxSize || cropH > maxSize) {
+    const scale = maxSize / Math.max(cropW, cropH)
+    cropped = cropped.resize({ width: Math.round(cropW * scale), height: Math.round(cropH * scale) })
+  }
+  return cropped.toJPEG(82).toString('base64')
+}
+
+ipcMain.on('screenshot:submit', async (_e, region: ScreenRegion) => {
   // Close the selector FIRST — otherwise its "截图中..." can stay stuck if anything below fails
   selectorWindow?.close()
   if (!overlayWindow) return
 
   try {
+    // Permission precheck (macOS): when screen recording isn't granted, desktopCapturer returns a
+    // wallpaper-only/blank image with a NON-zero size that slips past the zero-size check and yields
+    // a nonsense answer. Fail loudly here instead. (TCC status can lag a mid-session revoke, so the
+    // zero-size and native-empty checks below stay as backstops.)
+    if (process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+      throw new Error('未授权屏幕录制 —— 请到 系统设置 → 隐私与安全性 → 屏幕录制，给本应用授权后重启（开发时是终端/VS Code，打包后是 Helper）')
+    }
+
     // Crop against the display the selector actually covered (multi-monitor) — not always primary.
     const display = screen.getAllDisplays().find((d) => d.id === selectorDisplayId) ?? screen.getPrimaryDisplay()
-    const { width, height } = display.bounds  // logical pixels (same space as selector coords)
 
-    // Timeout guard — desktopCapturer can hang on macOS without screen recording permission
-    const capturePromise = desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: { width: Math.round(width * display.scaleFactor), height: Math.round(height * display.scaleFactor) }
-    })
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('截图超时，请检查屏幕录制权限')), 10000)
-    )
-    const sources = await Promise.race([capturePromise, timeoutPromise])
-
-    // Pick the source matching our display — desktopCapturer doesn't guarantee sources[0] is it.
-    const source = sources.find((s) => String(s.display_id) === String(display.id)) ?? sources[0]
-    if (!source) throw new Error('无法获取屏幕截图')
-
-    const thumb = source.thumbnail
-    const tsize = thumb.getSize()
-    if (tsize.width === 0 || tsize.height === 0) {
-      throw new Error('截屏内容为空 —— 请到 系统设置 → 隐私与安全性 → 屏幕录制，给运行本应用的程序（开发时是终端/VS Code，打包后是 Helper）授权后重启')
+    let imageBase64: string
+    if (process.platform === 'darwin') {
+      try {
+        imageBase64 = await captureRegionNative(display, region)
+      } catch (e) {
+        console.warn('[Screenshot] native screencapture failed, falling back to desktopCapturer:', e)
+        imageBase64 = await captureRegionDesktop(display, region)
+      }
+    } else {
+      imageBase64 = await captureRegionDesktop(display, region)
     }
-
-    // Map selector(viewport) coords → thumbnail pixels using the selector's OWN reported
-    // viewport size. display.bounds can differ from the actual viewport on notched/scaled
-    // Macs, which would push the crop past the thumbnail edge and clip the right/bottom.
-    const vw = region.vw || width
-    const vh = region.vh || height
-    const scaleX = tsize.width / vw
-    const scaleY = tsize.height / vh
-    const cx = Math.max(0, Math.round(region.x * scaleX))
-    const cy = Math.max(0, Math.round(region.y * scaleY))
-    const cw = Math.min(Math.round(region.w * scaleX), tsize.width - cx)
-    const ch = Math.min(Math.round(region.h * scaleY), tsize.height - cy)
-    console.log(`[Screenshot] region ${region.w}x${region.h}@${region.x},${region.y} · vw=${vw}x${vh} · thumb=${tsize.width}x${tsize.height} · crop=${cw}x${ch}@${cx},${cy}`)
-    let cropped = thumb.crop({ x: cx, y: cy, width: cw, height: ch })
-
-    // Downscale if too large — keeps API calls fast and avoids timeouts
-    const maxSize = 2000
-    const cropW = cropped.getSize().width
-    const cropH = cropped.getSize().height
-    if (cropW > maxSize || cropH > maxSize) {
-      const scale = maxSize / Math.max(cropW, cropH)
-      cropped = cropped.resize({ width: Math.round(cropW * scale), height: Math.round(cropH * scale) })
-    }
-
-    const imageBase64 = cropped.toPNG().toString('base64')
-    console.log(`[Screenshot] region ${region.w}x${region.h} → ${cropped.getSize().width}x${cropped.getSize().height}, thumb ${tsize.width}x${tsize.height}, ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
+    console.log(`[Screenshot] region ${region.w}x${region.h} → ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
 
     // 'direct' (default): one call — vision model streams the answer straight to the overlay.
     // 'ocr': two calls — extract editable text first, user reviews, then sends to the LLM.
     const mode = loadPersistedConfig().screenshotMode ?? 'direct'
     if (mode === 'ocr') {
+      ensureOverlayVisible()  // OCR path doesn't go through startStreamSafely — surface it too
       extractImageText(imageBase64, overlayWindow)
     } else {
       startStreamSafely((win) => streamImageAnswer(imageBase64, win))

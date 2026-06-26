@@ -1,7 +1,7 @@
+import { toFile } from 'openai'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { writeFileSync, unlinkSync, createReadStream } from 'fs'
-import { randomBytes } from 'crypto'
+import { readdirSync, unlinkSync } from 'fs'
 import { isHallucinatedText } from '../shared/hallucination'
 import { describeApiError } from './apiError'
 import { getOpenAIClient } from './openaiClient'
@@ -42,40 +42,35 @@ export async function transcribeAudio(
     : mimeType.includes('mp4') ? 'mp4'
     : 'webm'
 
-  // Write to temp file — avoids File API compat issues across Node versions
-  const tmpFile = join(tmpdir(), `ia_${randomBytes(4).toString('hex')}.${ext}`)
-  writeFileSync(tmpFile, audio)
-
-  try {
-    // Whisper accepts ISO 639-1 2-letter codes only (zh not zh-CN, en not en-US)
-    const lang = language?.split('-')[0]
-    // The dialogue prompt + temperature:0 are Whisper-specific tuning. Other backends
-    // (SenseVoice etc.) may reject the param or leak the canned phrasing, and the prompt is
-    // language-keyed so a non-zh/en clip isn't anchored toward the wrong language's wording.
-    const isWhisper = /whisper/i.test(config.model)
-    const promptByLang: Record<string, string> = {
-      zh: '面试官：请解释一下这个技术问题。候选人：好的，我来说明。',
-      en: 'Interviewer: Can you explain this concept? Candidate: Sure, let me explain.'
-    }
-    const prompt = promptByLang[lang ?? 'en']
-    const result = await client.audio.transcriptions.create({
-      file: createReadStream(tmpFile) as unknown as File,
-      model: config.model,
-      ...(lang ? { language: lang } : {}),
-      ...(isWhisper ? { temperature: 0, ...(prompt ? { prompt } : {}) } : {})
-    })
-    const text = result.text.trim()
-    // Diagnostic: tiny output from a sizable audio buffer means the audio was silent
-    // (routing/throttle) — not a Whisper failure. Logged so the two cases are distinguishable.
-    console.log(`[ASR] audio ${audio.length}B → "${text.slice(0, 40)}" (${text.length} chars)`)
-    if (isHallucinatedText(text)) {
-      console.log('[ASR] discarded as hallucination/boilerplate (empty result returned)')
-      return ''
-    }
-    return text
-  } finally {
-    try { unlinkSync(tmpFile) } catch { /* ignore */ }
+  // Whisper accepts ISO 639-1 2-letter codes only (zh not zh-CN, en not en-US)
+  const lang = language?.split('-')[0]
+  // The dialogue prompt + temperature:0 are Whisper-specific tuning. Other backends
+  // (SenseVoice etc.) may reject the param or leak the canned phrasing, and the prompt is
+  // language-keyed so a non-zh/en clip isn't anchored toward the wrong language's wording.
+  const isWhisper = /whisper/i.test(config.model)
+  const promptByLang: Record<string, string> = {
+    zh: '面试官：请解释一下这个技术问题。候选人：好的，我来说明。',
+    en: 'Interviewer: Can you explain this concept? Candidate: Sure, let me explain.'
   }
+  const prompt = promptByLang[lang ?? 'en']
+  // Upload the buffer directly via toFile — no temp file. (File is polyfilled in index.ts, and the
+  // old "avoids File API compat" temp-file workaround is obsolete.) The extension on the filename
+  // is what lets the backend infer the codec, so keep it aligned with the real mime type.
+  const result = await client.audio.transcriptions.create({
+    file: await toFile(audio, `audio.${ext}`, { type: mimeType }),
+    model: config.model,
+    ...(lang ? { language: lang } : {}),
+    ...(isWhisper ? { temperature: 0, ...(prompt ? { prompt } : {}) } : {})
+  })
+  const text = result.text.trim()
+  // Diagnostic: tiny output from a sizable audio buffer means the audio was silent
+  // (routing/throttle) — not a Whisper failure. Logged so the two cases are distinguishable.
+  console.log(`[ASR] audio ${audio.length}B → "${text.slice(0, 40)}" (${text.length} chars)`)
+  if (isHallucinatedText(text)) {
+    console.log('[ASR] discarded as hallucination/boilerplate (empty result returned)')
+    return ''
+  }
+  return text
 }
 
 // A 1-second mono 16kHz WAV with a faint tone — real (non-silent) audio so the
@@ -100,18 +95,27 @@ export async function testASRConnection(
   if (!cfg.apiKey) return { ok: false, message: '请先填写 ASR API Key' }
   if (!cfg.model) return { ok: false, message: '请先填写 ASR 模型名' }
   const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
-  const tmpFile = join(tmpdir(), `iatest_${randomBytes(4).toString('hex')}.wav`)
-  writeFileSync(tmpFile, makeProbeWav())
   const start = Date.now()
   try {
     await client.audio.transcriptions.create(
-      { file: createReadStream(tmpFile) as unknown as File, model: cfg.model },
+      { file: await toFile(makeProbeWav(), 'probe.wav', { type: 'audio/wav' }), model: cfg.model },
       { signal: AbortSignal.timeout(20000) }
     )
     return { ok: true, message: `连接成功 · 模型 ${cfg.model} · ${Date.now() - start}ms` }
   } catch (err) {
     return { ok: false, message: describeApiError(err) }
-  } finally {
-    try { unlinkSync(tmpFile) } catch { /* ignore */ }
   }
+}
+
+// Best-effort sweep of temp audio left by older builds (the current path uploads buffers directly,
+// no temp files) or by a run killed mid-transcribe. Call once on startup. Only our own prefixes.
+export function cleanupStaleTempAudio(): void {
+  try {
+    const dir = tmpdir()
+    for (const f of readdirSync(dir)) {
+      if (/^ia_.*\.(webm|ogg|mp4)$/.test(f) || /^iatest_.*\.wav$/.test(f)) {
+        try { unlinkSync(join(dir, f)) } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
 }

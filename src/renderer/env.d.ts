@@ -40,6 +40,7 @@ interface ElectronAPI {
   platform: string
   // Config
   getConfig: () => Promise<LLMConfig>
+  getPublicConfig: () => Promise<{ overlayOpacity?: number; screenshotMode?: 'direct' | 'ocr' }>
   setConfig: (partial: Partial<LLMConfig>) => void
   testLLM: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<{ ok: boolean; message: string }>
   testVision: (cfg: { apiKey: string; baseUrl: string; visionModel: string }) => Promise<{ ok: boolean; message: string }>

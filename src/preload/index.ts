@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── Config ──────────────────────────────────────────────────────────────────
   getConfig: () => ipcRenderer.invoke('config:get'),
+  // Secret-free subset for the overlay (no API keys reach that renderer)
+  getPublicConfig: () => ipcRenderer.invoke('config:get-public'),
   setConfig: (partial: Record<string, string>) =>
     ipcRenderer.send('config:set', partial),
   testLLM: (cfg: { apiKey: string; baseUrl: string; model: string }) =>

@@ -52,6 +52,16 @@ function safeSend(win: BrowserWindow, channel: string, payload?: unknown): boole
   return true
 }
 
+// The main window mirrors the stream LIFECYCLE (start/done/error, not chunks) so the Ask tab's
+// "发送中…" button can track real progress instead of a fixed timer. Registered from index.ts.
+let mainWindowRef: BrowserWindow | null = null
+export function setMainWindow(win: BrowserWindow | null): void {
+  mainWindowRef = win
+}
+function notifyMain(channel: string, payload: unknown): void {
+  if (mainWindowRef) safeSend(mainWindowRef, channel, payload)
+}
+
 export function setConfig(partial: Partial<LLMConfig>): void {
   currentConfig = { ...currentConfig, ...partial }
   console.log('[LLM] config updated:', { baseUrl: currentConfig.baseUrl, model: currentConfig.model, visionModel: currentConfig.visionModel })
@@ -74,6 +84,9 @@ export interface HistoryRound {
 // ask tab, voice auto-ask, screenshot-extracted text) shares one rolling context.
 const conversationHistory: HistoryRound[] = []
 const MAX_HISTORY_ROUNDS = 5
+// Secondary cap (on top of round count): keep only the most recent rounds that fit this many
+// chars, so a few long code answers can't bloat the prompt and inflate time-to-first-token.
+const MAX_HISTORY_CHARS = 6000
 
 export function clearHistory(): void {
   conversationHistory.length = 0
@@ -92,12 +105,16 @@ async function streamChat(
   overlayWindow: BrowserWindow
 ): Promise<void> {
   if (!currentConfig.apiKey) {
-    safeSend(overlayWindow, 'llm:error', { id: null, message: '请先在设置中填写 API Key' })
+    const message = '请先在设置中填写 API Key'
+    safeSend(overlayWindow, 'llm:error', { id: null, message })
+    notifyMain('llm:error', { id: null, message })  // so a failed Ask-tab submit re-enables its button
     return
   }
 
   if (isStreaming) {
-    safeSend(overlayWindow, 'llm:error', { id: null, message: '上一个问题还在生成中，请稍候' })
+    const message = '上一个问题还在生成中，请稍候'
+    safeSend(overlayWindow, 'llm:error', { id: null, message })
+    notifyMain('llm:error', { id: null, message })
     return
   }
 
@@ -109,8 +126,20 @@ async function streamChat(
   activeAbort = abort
   isStreaming = true
   safeSend(overlayWindow, 'llm:start', { id, question: questionLabel })
+  notifyMain('llm:start', { id, question: questionLabel })
+
+  // Idle watchdog: a half-open connection or a server that never sends [DONE] would otherwise
+  // hang the for-await forever (overlay stuck on "正在生成", isStreaming pinned true). Arm before
+  // the request (covers connect + first token) and re-arm on every chunk (covers inter-token gaps).
+  let timedOut = false
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  const armIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => { timedOut = true; abort.abort() }, 30000)
+  }
 
   try {
+    armIdle()
     const stream = await client.chat.completions.create(
       {
         model,
@@ -124,6 +153,7 @@ async function streamChat(
 
     let fullAnswer = ''
     for await (const chunk of stream) {
+      armIdle()
       const content = chunk.choices[0]?.delta?.content ?? ''
       if (content) {
         fullAnswer += content
@@ -140,17 +170,35 @@ async function streamChat(
         conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY_ROUNDS)
       }
     }
-    safeSend(overlayWindow, 'llm:done', { id })
+    // Empty, non-aborted result = the model/gateway returned nothing (wrong model name, or an
+    // inline error frame the SDK parsed without throwing). Surface it instead of a silent empty
+    // bubble — mirrors extractImageText's empty-content handling.
+    if (!abort.signal.aborted && !fullAnswer.trim()) {
+      const message = `模型未返回内容，请检查模型名是否正确/是否支持该接口\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]`
+      safeSend(overlayWindow, 'llm:error', { id, message })
+      notifyMain('llm:error', { id, message })
+    } else {
+      safeSend(overlayWindow, 'llm:done', { id })
+      notifyMain('llm:done', { id })
+    }
   } catch (err: unknown) {
-    // The SDK throws APIUserAbortError (name 'Error', not 'AbortError') when aborted before the
-    // first chunk, so detect user-stop via our own signal rather than the error name.
-    if (abort.signal.aborted) {
+    if (timedOut) {
+      const message = `请求超时（30 秒无响应），请检查网络或 Base URL\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]`
+      safeSend(overlayWindow, 'llm:error', { id, message })
+      notifyMain('llm:error', { id, message })
+    } else if (abort.signal.aborted) {
+      // The SDK throws APIUserAbortError (name 'Error', not 'AbortError') when aborted before the
+      // first chunk, so detect user-stop via our own signal rather than the error name.
       safeSend(overlayWindow, 'llm:done', { id })  // treat user-stop as done
+      notifyMain('llm:done', { id })
     } else {
       const msg = err instanceof Error ? err.message : String(err)
-      safeSend(overlayWindow, 'llm:error', { id, message: `${msg}\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]` })
+      const message = `${msg}\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]`
+      safeSend(overlayWindow, 'llm:error', { id, message })
+      notifyMain('llm:error', { id, message })
     }
   } finally {
+    if (idleTimer) clearTimeout(idleTimer)
     if (myGen === streamGen) {
       isStreaming = false
       activeAbort = null
@@ -207,7 +255,7 @@ export async function extractImageText(
         {
           role: 'user',
           content: [
-            { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
             { type: 'text', text: '请完整识别图片中的全部文字（含代码，保留换行与缩进），逐行原样输出，不要省略、不要总结、不要补充解释。' }
           ]
         }
@@ -253,7 +301,17 @@ function buildBaseMessages(intro: string, jobDescription: string, history: Histo
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemContent }
   ]
-  for (const round of history) {
+  // Walk newest→oldest accumulating a char budget; drop older rounds once it's exhausted. The
+  // newest round is always kept even if it alone exceeds the budget, so context never goes empty.
+  const selected: HistoryRound[] = []
+  let budget = MAX_HISTORY_CHARS
+  for (let i = history.length - 1; i >= 0; i--) {
+    const cost = history[i].question.length + history[i].answer.length
+    if (selected.length && budget - cost < 0) break
+    budget -= cost
+    selected.unshift(history[i])
+  }
+  for (const round of selected) {
     messages.push({ role: 'user', content: round.question })
     messages.push({ role: 'assistant', content: round.answer })
   }
@@ -279,7 +337,7 @@ function buildImageMessages(
   messages.push({
     role: 'user',
     content: [
-      { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
       { type: 'text', text: '请解答这张截图里的题目。如果是代码/算法题，给出完整可运行的解法并简要说明思路。' }
     ]
   })

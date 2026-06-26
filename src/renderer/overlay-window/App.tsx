@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, memo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 
 type LLMStatus = 'idle' | 'streaming' | 'done' | 'error'
 
@@ -55,7 +55,9 @@ export function App() {
 
   // ── Appearance: opacity ─────────────────────────────────────────────────────
   useEffect(() => {
-    window.electronAPI.getConfig().then((cfg) => {
+    // getPublicConfig (not getConfig): the overlay only needs appearance, so plaintext API keys
+    // never enter this renderer's memory.
+    window.electronAPI.getPublicConfig().then((cfg) => {
       if (cfg.overlayOpacity !== undefined) setBgOpacity(cfg.overlayOpacity)
     })
     const un = window.electronAPI.onOverlayOpacity((opacity) => setBgOpacity(opacity))
@@ -251,7 +253,7 @@ export function App() {
               className="text-xs px-2 py-0.5 rounded transition-colors"
               style={{
                 background: showInput ? 'rgba(59,130,246,0.2)' : 'transparent',
-                color: showInput ? '#7dd3fc' : '#334155',
+                color: showInput ? '#7dd3fc' : '#94a3b8',
                 border: `1px solid ${showInput ? 'rgba(59,130,246,0.4)' : 'transparent'}`,
                 cursor: 'pointer',
                 WebkitAppRegion: 'no-drag'
@@ -265,7 +267,7 @@ export function App() {
                 className="text-xs px-2 py-0.5 rounded transition-colors"
                 style={{
                   background: 'transparent',
-                  color: '#334155',
+                  color: '#94a3b8',
                   border: '1px solid transparent',
                   cursor: 'pointer',
                   WebkitAppRegion: 'no-drag'
@@ -289,15 +291,15 @@ export function App() {
             }}
           >
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs" style={{ color: '#334155' }}>
-                {listening ? '转录中 (每3秒)' : '最近转录'}
+              <span className="text-xs" style={{ color: '#64748b' }}>
+                {listening ? '录音中…(停止后转写)' : '最近转录'}
               </span>
               {allTranscript && (
                 <div className="flex gap-1.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
                   <button
                     onClick={() => setFinalLines([])}
                     className="text-xs px-1.5 py-0.5 rounded"
-                    style={{ background: 'rgba(30,30,60,0.6)', color: '#334155', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
+                    style={{ background: 'rgba(30,30,60,0.6)', color: '#94a3b8', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
                   >
                     清空
                   </button>
@@ -426,7 +428,7 @@ export function App() {
               <button
                 onClick={() => { setShowExtracted(false); setExtractedText(''); setExtractStatus('idle') }}
                 className="text-xs px-1.5 py-0.5 rounded"
-                style={{ background: 'rgba(30,30,60,0.6)', color: '#334155', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
+                style={{ background: 'rgba(30,30,60,0.6)', color: '#94a3b8', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
               >
                 关闭
               </button>
@@ -558,6 +560,9 @@ function CopyButton({ text }: { text: string }) {
 // already-finished rows above it keep the same `item` reference and skip re-rendering — no
 // re-parsing their markdown on every chunk flush. Only the live row re-renders per frame.
 const HistoryItemView = memo(function HistoryItemView({ item, showDivider }: { item: HistoryItem; showDivider: boolean }) {
+  // Retry/copy only make sense for a real text question. Screenshot-direct items store a label
+  // ('📷 截图解题'), and standalone error items store '' — re-asking those would send nonsense.
+  const canRetry = !!item.question && item.question !== '📷 截图解题'
   return (
     <div className="mb-4">
       {/* Question (omitted for standalone error items that have no question) */}
@@ -579,7 +584,25 @@ const HistoryItemView = memo(function HistoryItemView({ item, showDivider }: { i
           className="text-xs rounded-lg p-2"
           style={{ background: 'rgba(120, 20, 20, 0.4)', color: '#f87171' }}
         >
-          ⚠ {item.errorMsg}
+          <div>⚠ {item.errorMsg}</div>
+          {canRetry && (
+            <div className="flex gap-2 mt-1.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+              <button
+                onClick={() => window.electronAPI.askQuestion(item.question)}
+                className="px-2 py-0.5 rounded"
+                style={{ background: 'rgba(248,113,113,0.15)', color: '#fca5a5', border: '1px solid rgba(248,113,113,0.4)', cursor: 'pointer' }}
+              >
+                重试
+              </button>
+              <button
+                onClick={() => window.electronAPI.copyText(item.question)}
+                className="px-2 py-0.5 rounded"
+                style={{ background: 'rgba(30,30,60,0.6)', color: '#94a3b8', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
+              >
+                复制问题
+              </button>
+            </div>
+          )}
         </div>
       )}
       {item.answer && <AnswerText text={item.answer} streaming={item.status === 'streaming'} />}
@@ -592,8 +615,21 @@ const HistoryItemView = memo(function HistoryItemView({ item, showDivider }: { i
 })
 
 // ── Answer renderer ───────────────────────────────────────────────────────────
-function AnswerText({ text, streaming }: { text: string; streaming: boolean }) {
-  const segments = parseSegments(text, streaming)
+// One text block, memo'd by content. During streaming only the LAST (growing) segment changes,
+// so every already-closed segment skips re-running the markdown→HTML build — turning the live
+// row's per-frame cost from O(whole answer) into O(last segment).
+const MarkdownBlock = memo(function MarkdownBlock({ content }: { content: string }) {
+  return (
+    <div
+      className="space-y-1"
+      style={{ color: '#cbd5e1', wordBreak: 'break-word' }}
+      dangerouslySetInnerHTML={{ __html: renderMarkdownBlock(content) }}
+    />
+  )
+})
+
+const AnswerText = memo(function AnswerText({ text, streaming }: { text: string; streaming: boolean }) {
+  const segments = useMemo(() => parseSegments(text, streaming), [text, streaming])
   return (
     <div className="text-sm leading-relaxed space-y-2">
       {segments.map((seg, i) => {
@@ -617,18 +653,11 @@ function AnswerText({ text, streaming }: { text: string; streaming: boolean }) {
             </pre>
           )
         }
-        return (
-          <div
-            key={i}
-            className="space-y-1"
-            style={{ color: '#cbd5e1', wordBreak: 'break-word' }}
-            dangerouslySetInnerHTML={{ __html: renderMarkdownBlock(seg.content) }}
-          />
-        )
+        return <MarkdownBlock key={i} content={seg.content} />
       })}
     </div>
   )
-}
+})
 
 interface Segment { type: 'text' | 'code'; content: string; lang?: string }
 

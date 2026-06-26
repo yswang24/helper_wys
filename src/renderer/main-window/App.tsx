@@ -17,9 +17,13 @@ export function App() {
   const [needsSetup, setNeedsSetup] = useState(false)
 
   useEffect(() => {
-    window.electronAPI.getStatus().then(setStatus)
-    const t = setInterval(() => window.electronAPI.getStatus().then(setStatus), 2000)
-    return () => clearInterval(t)
+    const poll = () => { if (document.visibilityState === 'visible') window.electronAPI.getStatus().then(setStatus) }
+    poll()
+    // Skip polling while the window is hidden (⌘⌥M leaves it hidden but alive — backgroundThrottling
+    // is off for recording, so the timer wouldn't be throttled). Refresh immediately on re-show.
+    const t = setInterval(poll, 2000)
+    document.addEventListener('visibilitychange', poll)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', poll) }
   }, [])
 
   // On first load, if no API key is saved, redirect to settings
@@ -94,7 +98,7 @@ export function App() {
       {/* Content — all tabs stay mounted so their listeners (e.g. onAsrPttToggle) remain active */}
       <div className="flex-1 overflow-hidden relative">
         <div className="absolute inset-0 overflow-y-auto" style={{ display: tab === 'ask' ? 'block' : 'none' }}><AskTab /></div>
-        <div className="absolute inset-0 overflow-hidden flex flex-col" style={{ display: tab === 'voice' ? 'flex' : 'none' }}><VoiceTab /></div>
+        <div className="absolute inset-0 overflow-hidden flex flex-col" style={{ display: tab === 'voice' ? 'flex' : 'none' }}><VoiceTab active={tab === 'voice'} onGoSettings={() => setTab('settings')} /></div>
         <div className="absolute inset-0 overflow-y-auto" style={{ display: tab === 'settings' ? 'block' : 'none' }}><SettingsTab onSaved={() => setNeedsSetup(false)} /></div>
       </div>
 
@@ -130,20 +134,39 @@ function AskTab() {
     return () => clearTimeout(t)
   }, [jd])
 
-  // Clear the pending send-reset timer on unmount
-  useEffect(() => () => { if (sendTimerRef.current) clearTimeout(sendTimerRef.current) }, [])
+  // Track the real stream lifecycle (main mirrors llm:start/done/error to this window) so "发送中…"
+  // reflects actual generation, not a fixed 1.5s guess. But these events fire for EVERY stream
+  // (voice/screenshot/overlay too), so correlate by id: only the stream WE submitted drives the
+  // button. pendingSubmitRef adopts the first start after a local submit; finishing requires a
+  // matching id (or, for pre-start errors carrying id:null, that we're still pending).
+  const pendingSubmitRef = useRef(false)
+  const myStreamIdRef = useRef<number | null>(null)
+  useEffect(() => {
+    const clearSafety = () => { if (sendTimerRef.current) clearTimeout(sendTimerRef.current) }
+    const reset = () => { clearSafety(); pendingSubmitRef.current = false; myStreamIdRef.current = null; setIsSending(false) }
+    const unStart = window.electronAPI.onAnswerStart(({ id }) => {
+      if (pendingSubmitRef.current) { myStreamIdRef.current = id; pendingSubmitRef.current = false }
+    })
+    const unDone = window.electronAPI.onAnswerDone(({ id }) => {
+      if (!pendingSubmitRef.current && id === myStreamIdRef.current) reset()
+    })
+    const unError = window.electronAPI.onAnswerError(({ id }) => {
+      // id:null = a pre-start failure (missing key / busy). If we're mid-submit, it's ours → reset.
+      if (pendingSubmitRef.current || (id !== null && id === myStreamIdRef.current)) reset()
+    })
+    return () => { unStart(); unDone(); unError(); clearSafety() }
+  }, [])
 
   const submit = () => {
     const q = question.trim()
     if (!q || isSending) return
     setIsSending(true)
+    pendingSubmitRef.current = true  // adopt the next stream start as ours
     window.electronAPI.askQuestion(q)
     setQuestion('')
-    // The answer streams to the OVERLAY window, which this window can't observe, so re-enable the
-    // button on a fixed fallback timer. Kept in a ref so it's cleared on unmount / re-submit —
-    // no stacked timers, no setState-after-unmount.
+    // Safety net: if our start/done/error is ever missed, don't strand the button disabled.
     if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
-    sendTimerRef.current = setTimeout(() => setIsSending(false), 1500)
+    sendTimerRef.current = setTimeout(() => { pendingSubmitRef.current = false; myStreamIdRef.current = null; setIsSending(false) }, 30000)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -240,10 +263,15 @@ function AskTab() {
 }
 
 // ── Voice Tab ─────────────────────────────────────────────────────────────────
-function VoiceTab() {
+function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () => void }) {
   const [listening, setListening] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
-  const [lang, setLang] = useState<'zh-CN' | 'en-US'>('zh-CN')
+  // Whether an ASR key is configured — drives a pre-flight hint so the user isn't surprised by a
+  // failed transcription after recording a whole take. Default true to avoid a first-frame flash.
+  const [asrConfigured, setAsrConfigured] = useState(true)
+  // Persisted like deviceId — an English interviewer shouldn't have to re-pick the language each
+  // launch (a stale '' or bad value falls back to zh-CN via the explicit whitelist check).
+  const [lang, setLang] = useState<'zh-CN' | 'en-US'>(() => (localStorage.getItem('asrLang') === 'en-US' ? 'en-US' : 'zh-CN'))
   // Editable draft text — populated by live transcription, user can edit before sending
   const [draftText, setDraftText] = useState('')
   const [error, setError] = useState('')
@@ -258,7 +286,13 @@ function VoiceTab() {
   const langRef = useRef(lang)
   const deviceIdRef = useRef(deviceId)
   const devicesRef = useRef(devices)
-  useEffect(() => { langRef.current = lang }, [lang])
+  useEffect(() => { langRef.current = lang; localStorage.setItem('asrLang', lang) }, [lang])
+
+  // Re-check ASR config each time this tab becomes active, so the hint clears right after the user
+  // configures a key in Settings (no app restart needed).
+  useEffect(() => {
+    if (active) window.electronAPI.getConfig().then((cfg) => setAsrConfigured(!!cfg.asrApiKey))
+  }, [active])
   useEffect(() => { deviceIdRef.current = deviceId; localStorage.setItem('asrDeviceId', deviceId) }, [deviceId])
   useEffect(() => { devicesRef.current = devices }, [devices])
 
@@ -441,6 +475,17 @@ function VoiceTab() {
 
   return (
     <div className="flex flex-col h-full p-4 gap-3">
+      {/* ASR-not-configured pre-flight hint — clickable, jumps to Settings */}
+      {!asrConfigured && (
+        <div
+          onClick={onGoSettings}
+          className="rounded-lg px-3 py-2 text-xs leading-relaxed"
+          style={{ background: 'rgba(217,119,6,0.12)', border: '1px solid rgba(217,119,6,0.35)', color: '#fbbf24', cursor: 'pointer' }}
+        >
+          ⚠ 还没配置语音识别（ASR）Key，录音将无法转写。<strong>点此前往设置 → 语音识别</strong>。
+        </div>
+      )}
+
       {/* System-audio guidance */}
       <div className="rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#7dd3fc' }}>
         💡 想让 AI 听到<strong>对方的声音</strong>：装 BlackHole 虚拟声卡 → 在「音频 MIDI 设置」建一个含 BlackHole 的「多输出设备」并设为系统输出 → 下面选 BlackHole。仅选麦克风只会录到你自己。按 ⌘⌥K 开始/停止。
@@ -520,7 +565,7 @@ function VoiceTab() {
       <div className="flex flex-col flex-1 gap-2" style={{ minHeight: 0 }}>
         <div className="flex items-center justify-between">
           <span className="text-xs" style={{ color: '#334155' }}>
-            {listening ? '实时转写中...' : draftText ? '转写完成 — 可编辑后发送' : '转写结果'}
+            {listening ? '录音中…(停止后转写)' : draftText ? '转写完成 — 可编辑后发送' : '转写结果'}
           </span>
           <div className="flex gap-2">
             {draftText && (
@@ -539,7 +584,7 @@ function VoiceTab() {
           value={draftText}
           onChange={(e) => setDraftText(e.target.value)}
           readOnly={listening}
-          placeholder={transcribing ? '转写中…' : listening ? '正在监听...' : '按 ⌘⌥K 录音，转写结果将出现在这里...'}
+          placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 ⌘⌥K 录音，转写结果将出现在这里...'}
           className="flex-1 rounded-lg p-3 text-xs leading-relaxed resize-none outline-none"
           style={{
             background: '#0a0a12',
@@ -580,6 +625,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [overlayOpacity, setOverlayOpacity] = useState(0.94)
   const [screenshotMode, setScreenshotMode] = useState<'direct' | 'ocr'>('direct')
   const [saved, setSaved] = useState(false)
+  const [saveErr, setSaveErr] = useState('')
   const [llmTest, setLlmTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
   const [visionTest, setVisionTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
   const [asrTest, setAsrTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
@@ -627,6 +673,12 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   }, [])
 
   const save = () => {
+    // Light validation so an obviously-broken config doesn't get a false '✓ 已保存'. Non-empty key
+    // + well-formed URLs only — never gate on a live test (that would break editing offline).
+    if (!apiKey.trim()) { setSaveErr('请填写 API Key'); return }
+    try { new URL(baseUrl) } catch { setSaveErr('Base URL 需形如 https://api.example.com'); return }
+    if (asrApiKey.trim()) { try { new URL(asrBaseUrl) } catch { setSaveErr('ASR Base URL 需形如 https://api.example.com'); return } }
+    setSaveErr('')
     window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode })
     setSaved(true)
     onSaved?.()
@@ -814,6 +866,9 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       >
         {saved ? '✓ 已保存' : '保存设置'}
       </button>
+      {saveErr && (
+        <div className="text-xs" style={{ color: '#f87171' }}>✗ {saveErr}</div>
+      )}
     </div>
   )
 }
