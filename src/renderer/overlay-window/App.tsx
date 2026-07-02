@@ -13,7 +13,20 @@ interface HistoryItem {
 export function App() {
   const panelRef = useRef<HTMLDivElement>(null)
   const answerEndRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // Whether the answer view is parked at the bottom. Drives whether streaming output keeps
+  // yanking the viewport down — see the auto-scroll effect and onAnswerScroll below.
+  const stickToBottomRef = useRef(true)
   const nextIdRef = useRef(1)
+
+  // Recompute "am I at the bottom" on every user/programmatic scroll (40px slack). Once the user
+  // scrolls up to re-read earlier content, this goes false and auto-follow pauses; scrolling back
+  // to the bottom re-arms it.
+  const onAnswerScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }, [])
 
   // LLM history
   const [history, setHistory] = useState<HistoryItem[]>([])
@@ -145,6 +158,7 @@ export function App() {
     }
 
     const unStart = window.electronAPI.onAnswerStart(({ id, question }) => {
+      stickToBottomRef.current = true  // a new answer should always scroll into view
       setHistory((prev) => [...prev, { id, question, answer: '', status: 'streaming', errorMsg: '' }])
     })
     const unChunk = window.electronAPI.onAnswerChunk(({ id, chunk }) => {
@@ -208,7 +222,10 @@ export function App() {
   // once per frame, and smooth animations would stack and fight each other into visible jank.
   const lastAnswer = history.length > 0 ? history[history.length - 1].answer : ''
   useEffect(() => {
-    answerEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    // Only follow the stream while parked at the bottom — if the user scrolled up mid-generation
+    // to re-read a point, don't drag them back down on every token (a new answer re-pins via
+    // onAnswerStart). This is the difference between "回看可用" and "回看被打断".
+    if (stickToBottomRef.current) answerEndRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [lastAnswer])
 
   // Mouse pass-through is now handled by main process cursor polling (index.ts)
@@ -377,7 +394,7 @@ export function App() {
         )}
 
         {/* Answer area */}
-        <div className="flex-1 overflow-y-auto px-3 py-3" style={{ minHeight: 80 }}>
+        <div ref={scrollRef} onScroll={onAnswerScroll} className="flex-1 overflow-y-auto px-3 py-3" style={{ minHeight: 80 }}>
           {history.length === 0 && (
             <div className="text-xs italic" style={{ color: '#1e293b' }}>
               {listening ? '检测到完整问题后自动回答...' : '等待提问...'}

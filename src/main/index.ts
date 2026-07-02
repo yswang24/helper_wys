@@ -20,6 +20,7 @@ let overlayUserVisible = true  // tracks whether user wants overlay visible
 let isQuitting = false  // distinguishes "hide main window" from a real app quit
 let isCapturing = false // true while the screenshot selector is up — suppresses activate→restore
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null  // overlay mouse/restore heartbeat
+let overlayRebuildCount = 0  // consecutive crash-rebuilds; reset on a successful load, capped to stop a loop
 const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
 
 function registerShortcut(accelerator: string, handler: () => void): void {
@@ -181,8 +182,47 @@ function createOverlayWindow(): void {
     overlayWindow.loadFile(join(__dirname, '../renderer/overlay-window/index.html'))
   }
 
+  // Restore the saved position (clamped to a still-connected display) + persist future moves HERE
+  // rather than only at startup, so an overlay rebuilt after a crash lands where the user left it.
+  // Opacity needs no re-send: the overlay renderer pulls it via getPublicConfig on mount.
+  const persisted = loadPersistedConfig()
+  if (persisted.overlayX !== undefined && persisted.overlayY !== undefined) {
+    const [w, h] = overlayWindow.getSize()
+    const area = screen.getDisplayMatching({ x: persisted.overlayX, y: persisted.overlayY, width: w, height: h }).workArea
+    const x = Math.round(Math.min(Math.max(persisted.overlayX, area.x), area.x + area.width - w))
+    const y = Math.round(Math.min(Math.max(persisted.overlayY, area.y), area.y + area.height - h))
+    overlayWindow.setPosition(x, y)
+  }
+
+  overlayWindow.on('moved', () => {
+    if (!overlayWindow) return
+    const [x, y] = overlayWindow.getPosition()
+    const { overlayX: _x, overlayY: _y, ...rest } = loadPersistedConfig()
+    persistConfig({ ...rest, overlayX: x, overlayY: y })
+  })
+
+  // A clean load means the last (re)build succeeded — reset the crash-loop guard.
+  overlayWindow.webContents.on('did-finish-load', () => { overlayRebuildCount = 0 })
+
+  // A renderer crash (GPU/OOM) can leave the BrowserWindow alive but dead — 'closed' never fires,
+  // so every entry point (⌘⌥H, ask, screenshot) would silently no-op forever. Force-destroy it so
+  // the 'closed' handler below rebuilds a working overlay.
+  overlayWindow.webContents.on('render-process-gone', () => {
+    if (isQuitting || !overlayWindow) return
+    console.warn('[Overlay] render process gone — destroying to trigger rebuild')
+    overlayWindow.destroy()
+  })
+
   overlayWindow.on('closed', () => {
     overlayWindow = null
+    // Without this, a crashed/closed overlay is gone until an app restart: the heartbeat, ⌘⌥H, and
+    // every stream/screenshot entry point short-circuit on `if (!overlayWindow) return`, so answers
+    // have nowhere to go — fatal mid-interview. Rebuild unless we're really quitting; cap retries
+    // so a persistently-broken renderer can't spin forever.
+    if (!isQuitting && overlayRebuildCount < 5) {
+      overlayRebuildCount++
+      setTimeout(() => { if (!isQuitting && !overlayWindow) createOverlayWindow() }, 500)
+    }
   })
 }
 
@@ -328,28 +368,9 @@ app.whenReady().then(() => {
     restoreMainWindow()
   })
 
-  // Restore saved overlay position, clamped to a visible display — a stale off-screen
-  // position (e.g. after a resolution change) would otherwise lose the window.
-  if (overlayWindow && saved.overlayX !== undefined && saved.overlayY !== undefined) {
-    const [w, h] = overlayWindow.getSize()
-    const area = screen.getDisplayMatching({ x: saved.overlayX, y: saved.overlayY, width: w, height: h }).workArea
-    const x = Math.round(Math.min(Math.max(saved.overlayX, area.x), area.x + area.width - w))
-    const y = Math.round(Math.min(Math.max(saved.overlayY, area.y), area.y + area.height - h))
-    overlayWindow.setPosition(x, y)
-  }
-
-  // Save overlay position whenever it's moved
-  overlayWindow?.on('moved', () => {
-    if (!overlayWindow) return
-    const [x, y] = overlayWindow.getPosition()
-    const { overlayX: _x, overlayY: _y, ...rest } = loadPersistedConfig()
-    persistConfig({ ...rest, overlayX: x, overlayY: y })
-  })
-
-  // Apply saved overlay opacity
-  if (overlayWindow && saved.overlayOpacity !== undefined) {
-    overlayWindow.webContents.send('overlay:opacity', saved.overlayOpacity)
-  }
+  // Overlay position restore + move-persist now live in createOverlayWindow (so a rebuilt overlay
+  // after a crash re-applies them too). Opacity is pulled by the overlay renderer via
+  // getPublicConfig on mount, so nothing extra is needed here.
 
   registerShortcut('CommandOrControl+Alt+H', () => {
     if (!overlayWindow) return

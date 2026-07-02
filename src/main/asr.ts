@@ -35,7 +35,10 @@ export async function transcribeAudio(
 ): Promise<string> {
   if (!config.apiKey) throw new Error('请先在设置中填写语音识别 API Key')
 
-  const client = getOpenAIClient({ apiKey: config.apiKey, baseURL: config.baseUrl })
+  // maxRetries: 1 (not the SDK default 2) — bound how long a flaky/rate-limited backend can stall
+  // the whole voice pipeline. Combined with the 30s AbortSignal below, a stuck transcription can
+  // never hang the "转写中…" UI (and lock ⌘⌥X) for the SDK's default 3×10-minute worst case.
+  const client = getOpenAIClient({ apiKey: config.apiKey, baseURL: config.baseUrl, maxRetries: 1 })
 
   const ext = mimeType.includes('webm') ? 'webm'
     : mimeType.includes('ogg') ? 'ogg'
@@ -61,7 +64,7 @@ export async function transcribeAudio(
     model: config.model,
     ...(lang ? { language: lang } : {}),
     ...(isWhisper ? { temperature: 0, ...(prompt ? { prompt } : {}) } : {})
-  })
+  }, { signal: AbortSignal.timeout(30000) })  // hard ceiling: never let a stuck request wedge the UI
   const text = result.text.trim()
   // Diagnostic: tiny output from a sizable audio buffer means the audio was silent
   // (routing/throttle) — not a Whisper failure. Logged so the two cases are distinguishable.

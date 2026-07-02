@@ -380,7 +380,17 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
         }
         try {
           const buf = await blob.arrayBuffer()
-          const text = await window.electronAPI.transcribeChunk(buf, mimeType, currentLang)
+          // Backstop watchdog: the main process already bounds the request to ~30s, but if the IPC
+          // round-trip itself ever hangs, this guarantees the promise settles so the finally below
+          // clears transcribing/transcribingRef — otherwise ⌘⌥X stays locked (start branch bails on
+          // transcribingRef) with the UI stuck on "转写中…" until an app restart.
+          let watchdog: ReturnType<typeof setTimeout> | undefined
+          const text = await Promise.race([
+            window.electronAPI.transcribeChunk(buf, mimeType, currentLang),
+            new Promise<string>((_, reject) => {
+              watchdog = setTimeout(() => reject(new Error('转写超时（40 秒无响应），请重试')), 40000)
+            })
+          ]).finally(() => { if (watchdog) clearTimeout(watchdog) })
           if (text) { setError(''); appendToDraft(text) }
           else if (!silent) { setError('未识别到有效语音（可能是噪声、太短，或被降噪过滤）') }
         } catch (err) {
