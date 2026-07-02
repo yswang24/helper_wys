@@ -120,8 +120,22 @@ function AskTab() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const sendTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
-  // Sync JD to main process whenever it changes
+  // Backfill the persisted JD once on mount. jdLoadedRef gates the sync effect below: without it,
+  // the initial '' state would be pushed to the main process (and disk) before the load resolves,
+  // wiping the saved JD on every launch. Ref-gating (not skip-first-run) is StrictMode-safe — the
+  // double-invoked mount effect still sees the ref false until getConfig actually resolves.
+  const jdLoadedRef = useRef(false)
   useEffect(() => {
+    window.electronAPI.getConfig().then((cfg) => {
+      // Functional update: if the user already typed before the load resolved, keep their text.
+      if (cfg.jobDescription) setJd((cur) => cur || cfg.jobDescription)
+      jdLoadedRef.current = true
+    })
+  }, [])
+
+  // Sync JD to main process whenever it changes (post-load only — see jdLoadedRef above)
+  useEffect(() => {
+    if (!jdLoadedRef.current) return
     const t = setTimeout(() => {
       window.electronAPI.setConfig({ jobDescription: jd })
     }, 500)
@@ -629,6 +643,8 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [overlayOpacity, setOverlayOpacity] = useState(0.94)
   const [screenshotMode, setScreenshotMode] = useState<'direct' | 'ocr'>('direct')
   const [screenshotPrompt, setScreenshotPrompt] = useState('')
+  const [resume, setResume] = useState('')
+  const [answerLang, setAnswerLang] = useState<'zh' | 'en' | 'auto'>('zh')
   const [saved, setSaved] = useState(false)
   const [saveErr, setSaveErr] = useState('')
   const [llmTest, setLlmTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
@@ -675,6 +691,8 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       if (cfg.overlayOpacity !== undefined) setOverlayOpacity(cfg.overlayOpacity)
       if (cfg.screenshotMode) setScreenshotMode(cfg.screenshotMode)
       if (cfg.screenshotPrompt !== undefined) setScreenshotPrompt(cfg.screenshotPrompt)
+      if (cfg.resume !== undefined) setResume(cfg.resume)
+      if (cfg.answerLang === 'zh' || cfg.answerLang === 'en' || cfg.answerLang === 'auto') setAnswerLang(cfg.answerLang)
     })
   }, [])
 
@@ -685,7 +703,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
     try { new URL(baseUrl) } catch { setSaveErr('Base URL 需形如 https://api.example.com'); return }
     if (asrApiKey.trim()) { try { new URL(asrBaseUrl) } catch { setSaveErr('ASR Base URL 需形如 https://api.example.com'); return } }
     setSaveErr('')
-    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode, screenshotPrompt })
+    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode, screenshotPrompt, resume, answerLang })
     setSaved(true)
     onSaved?.()
     setTimeout(() => setSaved(false), 2000)
@@ -770,6 +788,62 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
             />
           </div>
         )}
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop: '1px solid #1e1e2e' }} />
+
+      {/* Answer personalization: language + candidate background */}
+      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#34d399' }}>
+        回答个性化
+      </div>
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          回答语言
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          {answerLang === 'zh'
+            ? '固定用中文回答（默认）'
+            : answerLang === 'en'
+              ? '固定用英文回答 — 英文面试选这个'
+              : '跟随提问语言：中文题中文答、英文题英文答'}
+        </div>
+        <div className="flex gap-2">
+          {([['zh', '中文'], ['en', 'English'], ['auto', '跟随提问']] as ['zh' | 'en' | 'auto', string][]).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => { setAnswerLang(m); window.electronAPI.setConfig({ answerLang: m }) }}
+              className="px-3 py-1 text-xs rounded transition-colors"
+              style={{
+                background: answerLang === m ? '#1d4ed8' : '#1e1e2e',
+                color: answerLang === m ? '#bfdbfe' : '#475569',
+                border: `1px solid ${answerLang === m ? '#3b82f6' : '#2d2d44'}`,
+                cursor: 'pointer'
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          个人背景 / 简历要点（可选）
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          粘贴技术栈、项目经历、目标级别等。AI 回答"做过什么项目"这类个人问题时会以第一人称贴合这份背景，而不是编标准答案。
+        </div>
+        <textarea
+          value={resume}
+          onChange={(e) => setResume(e.target.value)}
+          onBlur={(e) => { e.target.style.borderColor = '#1e1e3a'; window.electronAPI.setConfig({ resume }) }}
+          placeholder="例如：5 年后端，主做 Go/K8s；负责过日均 10 亿请求的网关系统，主导过一次跨机房容灾演练…"
+          rows={5}
+          spellCheck={false}
+          className="w-full rounded-lg px-3 py-2 text-xs resize-y outline-none transition-colors"
+          style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#e2e8f0', lineHeight: '1.6', fontFamily: 'inherit' }}
+          onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
+        />
       </div>
 
       {/* Divider */}

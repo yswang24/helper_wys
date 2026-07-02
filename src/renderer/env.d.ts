@@ -8,6 +8,10 @@ interface LLMConfig {
   model: string
   visionModel: string
   jobDescription: string
+  // Candidate background/resume highlights — injected into the system prompt
+  resume?: string
+  // Answer language: 'zh' fixed Chinese / 'en' fixed English / 'auto' follow the question
+  answerLang?: string
   // Custom prompt sent with the screenshot in direct-solve mode (⌘⌥S)
   screenshotPrompt?: string
   // ASR (Whisper)

@@ -7,6 +7,11 @@ interface PersistedConfig {
   baseUrl?: string
   model?: string
   visionModel?: string
+  // 岗位 JD 与候选人简历要点 — 面试往往跨多次启动准备，必须跨会话保留；非密钥，明文即可。
+  jobDescription?: string
+  resume?: string
+  // 回答语言：'zh' / 'en' / 'auto'（跟随提问）
+  answerLang?: string
   asrApiKey?: string
   asrBaseUrl?: string
   asrModel?: string

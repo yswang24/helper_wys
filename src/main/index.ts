@@ -491,13 +491,13 @@ ipcMain.on('config:set', (_e, partial) => {
   }
   // Persist via read-modify-write: only overwrite fields actually provided, so a
   // partial update (e.g. the opacity slider) can never blank out a saved API key.
-  // jobDescription is never persisted, so a JD-only update (fires on every typing pause)
-  // would otherwise trigger a full file read-modify-rewrite with identical content — skip it.
+  // Value comparison replaces the old "never persist jobDescription" skip: JD/resume now
+  // survive restarts, and an update carrying identical content (the JD sync fires on every
+  // typing pause; blur without edits re-sends the same resume) costs no disk rewrite.
   let persistChanged = false
   const merged = loadPersistedConfig() as Record<string, unknown>
   for (const k of Object.keys(p)) {
-    if (k === 'jobDescription') continue
-    if (p[k] !== undefined) { merged[k] = p[k]; persistChanged = true }
+    if (p[k] !== undefined && merged[k] !== p[k]) { merged[k] = p[k]; persistChanged = true }
   }
   if (overlayOpacity !== undefined) { merged.overlayOpacity = Number(overlayOpacity); persistChanged = true }
   if (persistChanged) persistConfig(merged as Parameters<typeof persistConfig>[0])

@@ -10,6 +10,12 @@ export interface LLMConfig {
   model: string
   visionModel: string
   jobDescription: string
+  // 候选人背景/简历要点 — 注入 system prompt（见 buildBaseMessages），让"你做过什么项目"这类
+  // 个人经历问题能贴合真实简历作答，而不是泛泛的标准答案。
+  resume: string
+  // 回答语言：'zh' 固定中文（旧行为）/ 'en' 固定英文 / 'auto' 跟随提问语言。
+  // 字符串而非联合类型：config:set 的 IPC 载荷是 Record<string, string>，与其它字段保持一致。
+  answerLang: string
   // Custom instruction sent alongside the screenshot in direct-solve mode (⌘⌥S). Empty = default.
   screenshotPrompt: string
 }
@@ -20,6 +26,8 @@ const DEFAULT_CONFIG: LLMConfig = {
   model: 'deepseek-chat',
   visionModel: 'deepseek-chat',
   jobDescription: '',
+  resume: '',
+  answerLang: 'zh',
   screenshotPrompt: ''
 }
 
@@ -215,7 +223,7 @@ async function streamChat(
 export function streamAnswer(question: string, overlayWindow: BrowserWindow): Promise<void> {
   return streamChat(
     currentConfig.model,
-    buildMessages(question, currentConfig.jobDescription, conversationHistory),
+    buildMessages(question, currentConfig.jobDescription, currentConfig.resume, conversationHistory),
     question,
     question,
     overlayWindow
@@ -229,7 +237,7 @@ export function streamImageAnswer(imageBase64: string, overlayWindow: BrowserWin
   const promptText = currentConfig.screenshotPrompt?.trim() || DEFAULT_SCREENSHOT_PROMPT
   return streamChat(
     model,
-    buildImageMessages(imageBase64, currentConfig.jobDescription, conversationHistory, promptText),
+    buildImageMessages(imageBase64, currentConfig.jobDescription, currentConfig.resume, conversationHistory, promptText),
     '📷 截图解题',
     '[截图题目]',
     overlayWindow
@@ -298,10 +306,23 @@ const ANSWER_RULES = `回答要求：
 - 多点并列时用数字列表
 - 回答控制在合理长度`
 
+// 回答语言片段，拼进两个入口的 system intro。此前硬编码中文——英文面试即使转写出英文问题，
+// 答案仍是中文、没法照读；现在跟随 answerLang 配置（设置页「回答个性化」）。
+function answerLangPhrase(): string {
+  switch (currentConfig.answerLang) {
+    case 'en': return '简洁、准确的英文'
+    case 'auto': return '与提问相同的语言（英文题用英文、中文题用中文）简洁准确地'
+    default: return '简洁、准确的中文'
+  }
+}
+
 // System prompt + replayed rolling memory, shared by the text and image entry points.
 // The caller appends the final user turn (text or image) to the returned array.
-function buildBaseMessages(intro: string, jobDescription: string, history: HistoryRound[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+function buildBaseMessages(intro: string, jobDescription: string, resume: string, history: HistoryRound[]): OpenAI.Chat.ChatCompletionMessageParam[] {
   let systemContent = `${intro}\n\n${ANSWER_RULES}`
+  if (resume.trim()) {
+    systemContent += `\n\n【候选人背景/简历】\n${resume.trim()}\n回答自我介绍、项目经历等个人问题时，用第一人称、结合以上真实背景作答；不要编造背景里没有的经历。`
+  }
   if (jobDescription.trim()) {
     systemContent += `\n\n【应聘岗位描述】\n${jobDescription.trim()}`
   }
@@ -328,9 +349,10 @@ function buildBaseMessages(intro: string, jobDescription: string, history: Histo
 function buildMessages(
   question: string,
   jobDescription: string,
+  resume: string,
   history: HistoryRound[] = []
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  const messages = buildBaseMessages('你是一个专业的技术面试助手。请用简洁、准确的中文回答面试问题。', jobDescription, history)
+  const messages = buildBaseMessages(`你是一个专业的技术面试助手。请用${answerLangPhrase()}回答面试问题。`, jobDescription, resume, history)
   messages.push({ role: 'user', content: question })
   return messages
 }
@@ -338,10 +360,11 @@ function buildMessages(
 function buildImageMessages(
   imageBase64: string,
   jobDescription: string,
+  resume: string,
   history: HistoryRound[],
   promptText: string
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  const messages = buildBaseMessages('你是一个专业的技术面试助手。下面给你一张题目截图，请先看懂图里的题目/代码，再用简洁、准确的中文作答。', jobDescription, history)
+  const messages = buildBaseMessages(`你是一个专业的技术面试助手。下面给你一张题目截图，请先看懂图里的题目/代码，再用${answerLangPhrase()}作答。`, jobDescription, resume, history)
   messages.push({
     role: 'user',
     content: [
