@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import { isHallucinatedText } from '../../shared/hallucination'
 
 interface AppStatus {
   contentProtection: boolean
   overlayVisible: boolean
   platform: string
   version: string
+  failedShortcuts?: string[]
 }
 
 type Tab = 'ask' | 'voice' | 'settings'
@@ -15,9 +17,14 @@ export function App() {
   const [needsSetup, setNeedsSetup] = useState(false)
 
   useEffect(() => {
-    window.electronAPI.getStatus().then(setStatus)
-    const t = setInterval(() => window.electronAPI.getStatus().then(setStatus), 2000)
-    return () => clearInterval(t)
+    // Only static fields are shown now (version + failedShortcuts) — no live overlay status — so a
+    // mount fetch plus one delayed refetch (failedShortcuts is set during app startup, which can
+    // land just after this window mounts) replaces the old permanent 2s polling.
+    let cancelled = false
+    const fetchStatus = () => window.electronAPI.getStatus().then((s) => { if (!cancelled) setStatus(s) })
+    fetchStatus()
+    const t = setTimeout(fetchStatus, 1200)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [])
 
   // On first load, if no API key is saved, redirect to settings
@@ -38,17 +45,23 @@ export function App() {
           className="w-7 h-7 rounded-md flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
           style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}
         >
-          IA
+          H
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-white">Interview Assistant</div>
+          <div className="text-sm font-semibold text-white">Helper</div>
           <div className="text-xs" style={{ color: '#475569' }}>v{status?.version ?? '...'}</div>
         </div>
-        <div className="flex gap-1.5">
-          <Pill ok={status?.contentProtection ?? false} label="隐身" />
-          <Pill ok={status?.overlayVisible ?? false} label="覆盖层" />
-        </div>
       </div>
+
+      {/* Shortcut-registration failure warning */}
+      {status?.failedShortcuts && status.failedShortcuts.length > 0 && (
+        <div
+          className="px-4 py-2 text-xs"
+          style={{ background: 'rgba(217,119,6,0.12)', borderBottom: '1px solid rgba(217,119,6,0.3)', color: '#fbbf24' }}
+        >
+          ⚠ 以下快捷键注册失败（可能被其他应用占用）：{status.failedShortcuts.join('、')}
+        </div>
+      )}
 
       {/* Tab bar */}
       <div className="flex border-b px-2 pt-2" style={{ borderColor: '#1e1e2e' }}>
@@ -79,10 +92,10 @@ export function App() {
         </div>
       )}
 
-      {/* Content — all tabs stay mounted so their listeners (e.g. onAsrToggle) remain active */}
+      {/* Content — all tabs stay mounted so their listeners (e.g. onAsrPttToggle) remain active */}
       <div className="flex-1 overflow-hidden relative">
         <div className="absolute inset-0 overflow-y-auto" style={{ display: tab === 'ask' ? 'block' : 'none' }}><AskTab /></div>
-        <div className="absolute inset-0 overflow-hidden flex flex-col" style={{ display: tab === 'voice' ? 'flex' : 'none' }}><VoiceTab /></div>
+        <div className="absolute inset-0 overflow-hidden flex flex-col" style={{ display: tab === 'voice' ? 'flex' : 'none' }}><VoiceTab active={tab === 'voice'} onGoSettings={() => setTab('settings')} /></div>
         <div className="absolute inset-0 overflow-y-auto" style={{ display: tab === 'settings' ? 'block' : 'none' }}><SettingsTab onSaved={() => setNeedsSetup(false)} /></div>
       </div>
 
@@ -91,11 +104,9 @@ export function App() {
         className="px-4 py-2 text-xs border-t flex gap-3 flex-wrap"
         style={{ borderColor: '#1e1e2e', color: '#334155' }}
       >
-        <span><kbd className="font-mono">Ctrl+Shift+H</kbd> 覆盖层</span>
-        <span><kbd className="font-mono">Ctrl+Shift+M</kbd> 此窗口</span>
-        <span><kbd className="font-mono">Ctrl+Shift+L</kbd> 监听</span>
-        <span><kbd className="font-mono">Ctrl+Shift+X</kbd> 清空</span>
-        <span><kbd className="font-mono">Ctrl+Shift+S</kbd> 截图</span>
+        <span><kbd className="font-mono">⌘⌥H</kbd> 覆盖层</span>
+        <span><kbd className="font-mono">⌘⌥X</kbd> 录音开关</span>
+        <span><kbd className="font-mono">⌘⌥S</kbd> 截图解题</span>
       </div>
     </div>
   )
@@ -107,23 +118,63 @@ function AskTab() {
   const [jd, setJd] = useState('')
   const [isSending, setIsSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const sendTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
-  // Sync JD to main process whenever it changes
+  // Backfill the persisted JD once on mount. jdLoadedRef gates the sync effect below: without it,
+  // the initial '' state would be pushed to the main process (and disk) before the load resolves,
+  // wiping the saved JD on every launch. Ref-gating (not skip-first-run) is StrictMode-safe — the
+  // double-invoked mount effect still sees the ref false until getConfig actually resolves.
+  const jdLoadedRef = useRef(false)
   useEffect(() => {
+    window.electronAPI.getConfig().then((cfg) => {
+      // Functional update: if the user already typed before the load resolved, keep their text.
+      if (cfg.jobDescription) setJd((cur) => cur || cfg.jobDescription)
+      jdLoadedRef.current = true
+    })
+  }, [])
+
+  // Sync JD to main process whenever it changes (post-load only — see jdLoadedRef above)
+  useEffect(() => {
+    if (!jdLoadedRef.current) return
     const t = setTimeout(() => {
       window.electronAPI.setConfig({ jobDescription: jd })
     }, 500)
     return () => clearTimeout(t)
   }, [jd])
 
+  // Track the real stream lifecycle (main mirrors llm:start/done/error to this window) so "发送中…"
+  // reflects actual generation, not a fixed 1.5s guess. But these events fire for EVERY stream
+  // (voice/screenshot/overlay too), so correlate by id: only the stream WE submitted drives the
+  // button. pendingSubmitRef adopts the first start after a local submit; finishing requires a
+  // matching id (or, for pre-start errors carrying id:null, that we're still pending).
+  const pendingSubmitRef = useRef(false)
+  const myStreamIdRef = useRef<number | null>(null)
+  useEffect(() => {
+    const clearSafety = () => { if (sendTimerRef.current) clearTimeout(sendTimerRef.current) }
+    const reset = () => { clearSafety(); pendingSubmitRef.current = false; myStreamIdRef.current = null; setIsSending(false) }
+    const unStart = window.electronAPI.onAnswerStart(({ id }) => {
+      if (pendingSubmitRef.current) { myStreamIdRef.current = id; pendingSubmitRef.current = false }
+    })
+    const unDone = window.electronAPI.onAnswerDone(({ id }) => {
+      if (!pendingSubmitRef.current && id === myStreamIdRef.current) reset()
+    })
+    const unError = window.electronAPI.onAnswerError(({ id }) => {
+      // id:null = a pre-start failure (missing key / busy). If we're mid-submit, it's ours → reset.
+      if (pendingSubmitRef.current || (id !== null && id === myStreamIdRef.current)) reset()
+    })
+    return () => { unStart(); unDone(); unError(); clearSafety() }
+  }, [])
+
   const submit = () => {
     const q = question.trim()
     if (!q || isSending) return
     setIsSending(true)
+    pendingSubmitRef.current = true  // adopt the next stream start as ours
     window.electronAPI.askQuestion(q)
     setQuestion('')
-    // Reset sending state after a short delay (streaming start triggers it)
-    setTimeout(() => setIsSending(false), 1500)
+    // Safety net: if our start/done/error is ever missed, don't strand the button disabled.
+    if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
+    sendTimerRef.current = setTimeout(() => { pendingSubmitRef.current = false; myStreamIdRef.current = null; setIsSending(false) }, 30000)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -219,173 +270,276 @@ function AskTab() {
   )
 }
 
-const QUESTION_RE = /[？?。！!]$|[\s\S]{15,}$/
-
-// Whisper hallucinates these when audio is silent/noisy (streaming platform watermarks,
-// common video endings, etc. from training data)
-const HALLUCINATION_RE = /点赞|订阅|转发|打赏|谢谢大家|明镜|优优独播|YoYo Television|独播剧场|爱奇艺|腾讯视频|优酷|bilibili|哔哩哔哩|字幕组|制作字幕|版权所有|请勿盗版|Thank you for watching|thanks for watching|please subscribe|don't forget to like|请关注|扫码|二维码|本视频|本期视频/i
-
 // ── Voice Tab ─────────────────────────────────────────────────────────────────
-function VoiceTab() {
+function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () => void }) {
   const [listening, setListening] = useState(false)
-  const [lang, setLang] = useState<'zh-CN' | 'en-US'>('zh-CN')
-  // macOS 系统音频回环(loopback)捕获不稳定，默认使用麦克风
-  const [audioSource, setAudioSource] = useState<'mic' | 'system'>(
-    window.electronAPI.platform === 'darwin' ? 'mic' : 'system'
-  )
-  const [transcriptLines, setTranscriptLines] = useState<string[]>([])
+  const [transcribing, setTranscribing] = useState(false)
+  // Whether an ASR key is configured — drives a pre-flight hint so the user isn't surprised by a
+  // failed transcription after recording a whole take. Default true to avoid a first-frame flash.
+  const [asrConfigured, setAsrConfigured] = useState(true)
+  // Persisted like deviceId — an English interviewer shouldn't have to re-pick the language each
+  // launch (a stale '' or bad value falls back to zh-CN via the explicit whitelist check).
+  const [lang, setLang] = useState<'zh-CN' | 'en-US'>(() => (localStorage.getItem('asrLang') === 'en-US' ? 'en-US' : 'zh-CN'))
+  // Editable draft text — populated by live transcription, user can edit before sending
+  const [draftText, setDraftText] = useState('')
   const [error, setError] = useState('')
-  const transcriptRef = useRef<HTMLDivElement>(null)
+  // Audio input device — pick BlackHole (virtual device) to capture system/meeting audio, or a mic
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
+  const [deviceId, setDeviceId] = useState<string>(() => localStorage.getItem('asrDeviceId') || '')
+  const draftRef = useRef<HTMLTextAreaElement>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const listeningRef = useRef(false)
+  const transcribingRef = useRef(false)  // true while a stopped take is still being transcribed
   const langRef = useRef(lang)
-  useEffect(() => { langRef.current = lang }, [lang])
+  const deviceIdRef = useRef(deviceId)
+  const devicesRef = useRef(devices)
+  useEffect(() => { langRef.current = lang; localStorage.setItem('asrLang', lang) }, [lang])
 
-  // Keyboard shortcut Ctrl+Shift+L toggles from overlay side
+  // Re-check ASR config each time this tab becomes active, so the hint clears right after the user
+  // configures a key in Settings (no app restart needed).
   useEffect(() => {
-    const un = window.electronAPI.onAsrToggle(() => {
-      if (listeningRef.current) stopCapture()
-      else startCapture(langRef.current, audioSource)
-    })
-    return un
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioSource])
+    if (active) window.electronAPI.getConfig().then((cfg) => setAsrConfigured(!!cfg.asrApiKey))
+  }, [active])
+  useEffect(() => { deviceIdRef.current = deviceId; localStorage.setItem('asrDeviceId', deviceId) }, [deviceId])
+  useEffect(() => { devicesRef.current = devices }, [devices])
 
+  // Enumerate audio input devices (labels only populate after a mic-permission grant)
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' })
-  }, [transcriptLines])
+    const refresh = async () => {
+      try {
+        const list = await navigator.mediaDevices.enumerateDevices()
+        setDevices(list.filter((d) => d.kind === 'audioinput'))
+      } catch { /* ignore */ }
+    }
+    refresh()
+    navigator.mediaDevices.addEventListener('devicechange', refresh)
+    return () => navigator.mediaDevices.removeEventListener('devicechange', refresh)
+  }, [])
 
-  const pushLine = (text: string) => {
-    const t = text.trim()
-    if (!t || t.length < 2) return
-    if (HALLUCINATION_RE.test(t)) return
-    setTranscriptLines((prev) => {
-      // Skip if identical to any of the last 3 lines (catches alternating hallucinations)
-      if (prev.slice(-3).includes(t)) return prev
-      return [...prev, t].slice(-40)
-    })
-    window.electronAPI.sendTranscript({ text: t, isFinal: true })
-    if (QUESTION_RE.test(t)) {
-      window.electronAPI.autoAsk(t)
+  const grantAndRefresh = async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true })
+      s.getTracks().forEach((t) => t.stop())
+      const list = await navigator.mediaDevices.enumerateDevices()
+      setDevices(list.filter((d) => d.kind === 'audioinput'))
+      setError('')
+    } catch (err) {
+      setError(`无法获取麦克风权限：${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
-  const startCapture = async (currentLang: string, src: 'mic' | 'system') => {
+  const appendToDraft = (text: string) => {
+    const t = text.trim()
+    if (!t || t.length < 2) return
+    if (isHallucinatedText(t)) return
+    window.electronAPI.sendTranscript({ text: t, isFinal: true })  // mirror live transcript to overlay panel
+    setDraftText((prev) => {
+      const combined = prev ? prev + ' ' + t : t
+      return combined.slice(-2000)  // cap at 2000 chars
+    })
+  }
+
+  const startCapture = async (currentLang: string) => {
     setError('')
     try {
+      // macOS has no system-audio loopback via getDisplayMedia (Windows-only). Capture the
+      // selected input device instead: BlackHole = system/meeting audio, otherwise a mic.
+      const id = deviceIdRef.current
       let stream: MediaStream
-      if (src === 'system') {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          audio: true,
-          video: { width: 1, height: 1, frameRate: 1 }
-        })
-        if (stream.getAudioTracks().length === 0) {
-          stream.getTracks().forEach((t) => t.stop())
-          throw new Error('未获取到音频轨道，系统可能不支持 loopback 捕获')
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true })
+      } catch (e) {
+        // Selected device unavailable (e.g. Bluetooth headset just disconnected) → fall back to default
+        const name = (e as { name?: string })?.name || ''
+        if (id && (name === 'OverconstrainedError' || name === 'NotFoundError' || name === 'NotReadableError')) {
+          setError('所选音频设备不可用（蓝牙耳机断开？），已临时改用默认输入设备')
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        } else {
+          throw e
         }
-      } else {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
       }
-
       streamRef.current = stream
+      // Labels only appear post-permission — refresh so the picker becomes readable.
+      // Read via ref: this runs from a mount-time ⌘⌥X closure where `devices` would be stale [].
+      if (devicesRef.current.some((d) => !d.label)) {
+        navigator.mediaDevices.enumerateDevices()
+          .then((l) => setDevices(l.filter((d) => d.kind === 'audioinput')))
+          .catch(() => {})
+      }
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus' : 'audio/webm'
 
-      // Timesliced recording (start(N)) only puts WebM headers in the first chunk —
-      // subsequent chunks are raw data that Whisper rejects. Instead, restart the
-      // recorder every 3s so each recording is a complete, valid file.
-      const onChunk = async (data: Blob) => {
-        if (data.size < 5000) return
+      // Manual bracketing: one continuous recording from ⌘⌥X-start to ⌘⌥X-stop, then
+      // transcribed in a single pass on stop. The user delimits the utterance — no VAD.
+      const chunks: Blob[] = []
+      const rec = new MediaRecorder(new MediaStream(stream.getAudioTracks()), { mimeType })
+      recorderRef.current = rec
+      const startedAt = Date.now()
+      rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+      rec.onstop = async () => {
+        const blob = new Blob(chunks, { type: mimeType })
+        const durMs = Date.now() - startedAt
+        // Diagnostic: bytes-per-second far below ~1KB/s means we captured silence —
+        // usually a hidden-window throttle or the input device not receiving system audio.
+        console.log(`[ASR] 录音停止: ${durMs}ms, blob ${blob.size}B (${Math.round(blob.size / Math.max(durMs / 1000, 0.1))}B/s)`)
+        if (blob.size < 2000) {  // nothing meaningful captured — tell the user instead of vanishing
+          setError('录音太短，没有捕获到有效音频')
+          setTranscribing(false); transcribingRef.current = false; return
+        }
+        let silent = false
+        if (durMs > 1500 && blob.size / (durMs / 1000) < 800) {
+          silent = true
+          setError('录到的音频几乎是静音。请确认系统输出已路由到所选输入设备（如 BlackHole 多输出设备），并保持主窗口可见或已生效的后台采集。')
+        }
         try {
-          const buf = await data.arrayBuffer()
-          const text = await window.electronAPI.transcribeChunk(buf, mimeType, currentLang)
-          if (text) { setError(''); pushLine(text) }
+          const buf = await blob.arrayBuffer()
+          // Backstop watchdog: the main process already bounds the request to ~30s, but if the IPC
+          // round-trip itself ever hangs, this guarantees the promise settles so the finally below
+          // clears transcribing/transcribingRef — otherwise ⌘⌥X stays locked (start branch bails on
+          // transcribingRef) with the UI stuck on "转写中…" until an app restart.
+          let watchdog: ReturnType<typeof setTimeout> | undefined
+          const text = await Promise.race([
+            window.electronAPI.transcribeChunk(buf, mimeType, currentLang),
+            new Promise<string>((_, reject) => {
+              watchdog = setTimeout(() => reject(new Error('转写超时（40 秒无响应），请重试')), 40000)
+            })
+          ]).finally(() => { if (watchdog) clearTimeout(watchdog) })
+          if (text) { setError(''); appendToDraft(text) }
+          else if (!silent) { setError('未识别到有效语音（可能是噪声、太短，或被降噪过滤）') }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           if (!msg.includes('could not process file') && !msg.includes('valid media')) {
             setError(`转录失败: ${msg}`)
           }
+        } finally {
+          setTranscribing(false)
+          transcribingRef.current = false
         }
       }
 
-      const startCycle = () => {
-        if (!listeningRef.current || !streamRef.current) return
-        const audioStream = new MediaStream(streamRef.current.getAudioTracks())
-        const rec = new MediaRecorder(audioStream, { mimeType })
-        recorderRef.current = rec
-        rec.ondataavailable = (e) => { if (e.data.size > 0) onChunk(e.data) }
-        rec.onstop = () => { if (listeningRef.current) startCycle() }
-        rec.start()
-        setTimeout(() => { if (rec.state === 'recording') rec.stop() }, 3000)
-      }
-
       stream.getTracks().forEach((t) => {
-        t.onended = () => { if (listeningRef.current) stopCapture() }
+        t.onended = () => {
+          if (listeningRef.current) {
+            setError('音频设备已断开（蓝牙耳机？），录音已停止；重连后按 ⌘⌥X 重新开始。')
+            stopCapture()
+          }
+        }
       })
 
       listeningRef.current = true
       setListening(true)
       window.electronAPI.startListening()
-      startCycle()
+      rec.start()  // single continuous recording until stopCapture()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (src === 'system' && window.electronAPI.platform === 'darwin') {
-        setError(
-          `macOS 系统音频捕获失败：${msg}。建议切换到「麦克风」模式，或前往 系统设置 → 隐私与安全性 → 屏幕录制，给 Terminal 授权后重启应用。`
-        )
-      } else {
-        setError(src === 'system' ? `系统音频失败: ${msg}` : `麦克风失败: ${msg}`)
-      }
+      setError(
+        `录音失败：${msg}。请在 系统设置 → 隐私与安全性 → 麦克风 给应用授权；要监听对方声音，请选择 BlackHole 设备（见上方说明）。`
+      )
     }
   }
 
   const stopCapture = () => {
-    listeningRef.current = false  // must be first — prevents onstop from restarting cycle
-    recorderRef.current?.stop()
-    recorderRef.current = null
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
     listeningRef.current = false
     setListening(false)
+    const rec = recorderRef.current
+    recorderRef.current = null
+    // Stopping triggers rec.onstop, which transcribes the whole take, then clears transcribing
+    if (rec) { setTranscribing(true); transcribingRef.current = true; rec.stop() }
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
     window.electronAPI.stopListening()
   }
 
-  const toggle = () => {
-    if (listening) stopCapture()
-    else startCapture(langRef.current, audioSource)
+  // Toggle recording: ⌘⌥X pressed once = start, pressed again = stop.
+  // listeningRef is the single source of truth — main process just sends a toggle nudge.
+  // togglingRef guards the async start window so a fast double-press can't spawn two recorders.
+  const togglingRef = useRef(false)
+  useEffect(() => {
+    const un = window.electronAPI.onAsrPttToggle(async () => {
+      if (togglingRef.current) return
+      togglingRef.current = true
+      try {
+        if (listeningRef.current) {
+          stopCapture()
+        } else {
+          // Don't start a new take while the previous one is still transcribing — otherwise the
+          // old onstop appends its result into the freshly-cleared new draft and desyncs the UI.
+          if (transcribingRef.current) return
+          setDraftText('')
+          await startCapture(langRef.current)
+        }
+      } finally {
+        togglingRef.current = false
+      }
+    })
+    return un
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+
+
+  const sendToAI = () => {
+    const text = draftText.trim()
+    if (!text) return
+    window.electronAPI.autoAsk(text)
+    setDraftText('')
   }
+
+  // Heuristic: warn if the chosen input looks like a Bluetooth headset MIC. Selecting it forces
+  // macOS into low-quality HFP mode (audible to the interviewer) — capture BlackHole instead.
+  const selectedDevice = devices.find((d) => d.deviceId === deviceId)
+  const looksLikeBtMic = /airpods|bluetooth|蓝牙|buds|beats|jabra|bose|sony w[fh]-|耳机/i.test(selectedDevice?.label || '')
 
   return (
     <div className="flex flex-col h-full p-4 gap-3">
-      {/* Audio source selector */}
-      <div>
-        <div className="text-xs mb-1.5" style={{ color: '#475569' }}>音频来源</div>
-        <div className="flex gap-2">
-          {([['system', '系统音频'], ['mic', '麦克风']] as const).map(([src, label]) => (
-            <button
-              key={src}
-              onClick={() => setAudioSource(src)}
-              className="flex-1 px-3 py-1.5 text-xs rounded transition-colors font-medium"
-              style={{
-                background: audioSource === src
-                  ? (src === 'system' ? 'rgba(124,58,237,0.2)' : 'rgba(15,118,110,0.2)')
-                  : '#1e1e2e',
-                color: audioSource === src ? (src === 'system' ? '#a78bfa' : '#34d399') : '#475569',
-                border: `1px solid ${audioSource === src ? (src === 'system' ? '#7c3aed' : '#0f766e') : '#2d2d44'}`,
-                cursor: 'pointer'
-              }}
-            >
-              {label}
-            </button>
-          ))}
+      {/* ASR-not-configured pre-flight hint — clickable, jumps to Settings */}
+      {!asrConfigured && (
+        <div
+          onClick={onGoSettings}
+          className="rounded-lg px-3 py-2 text-xs leading-relaxed"
+          style={{ background: 'rgba(217,119,6,0.12)', border: '1px solid rgba(217,119,6,0.35)', color: '#fbbf24', cursor: 'pointer' }}
+        >
+          ⚠ 还没配置语音识别（ASR）Key，录音将无法转写。<strong>点此前往设置 → 语音识别</strong>。
         </div>
-        <div className="text-xs mt-1.5" style={{ color: '#334155' }}>
-          {audioSource === 'system'
-            ? '捕获所有系统声音（会议软件、B站等）— 需要 ASR API Key'
-            : '捕获麦克风输入 — 需要 ASR API Key'}
-        </div>
+      )}
+
+      {/* System-audio guidance */}
+      <div className="rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#7dd3fc' }}>
+        💡 想让 AI 听到<strong>对方的声音</strong>：装 BlackHole 虚拟声卡 → 在「音频 MIDI 设置」建一个含 BlackHole 的「多输出设备」并设为系统输出 → 下面选 BlackHole。仅选麦克风只会录到你自己。按 ⌘⌥X 开始/停止。
+        <br />🎧 <strong>用蓝牙耳机</strong>：把耳机也加进上面的「多输出设备」（照常从耳机听），并设非蓝牙设备为主、给蓝牙开「漂移校正」。采集仍选 <strong>BlackHole</strong>，<strong>别选蓝牙耳机的麦克风</strong>。
       </div>
+
+      {/* Audio input device picker */}
+      <div className="flex gap-2 items-center">
+        <select
+          value={deviceId}
+          onChange={(e) => setDeviceId(e.target.value)}
+          className="flex-1 rounded px-2 py-1.5 text-xs outline-none"
+          style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#94a3b8' }}
+        >
+          <option value="">默认输入设备（麦克风）</option>
+          {devices.map((d) => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {d.label || `输入设备 ${d.deviceId.slice(0, 6)}`}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={grantAndRefresh}
+          className="px-2 py-1.5 text-xs rounded flex-shrink-0"
+          style={{ background: '#1e1e2e', color: '#64748b', border: '1px solid #2d2d44', cursor: 'pointer' }}
+        >
+          授权/刷新
+        </button>
+      </div>
+
+      {/* Bluetooth-mic warning: selecting a BT headset mic forces HFP mode */}
+      {looksLikeBtMic && (
+        <div className="rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: 'rgba(217,119,6,0.12)', border: '1px solid rgba(217,119,6,0.35)', color: '#fbbf24' }}>
+          ⚠ 这看起来是蓝牙耳机的麦克风。选它会让系统切到 HFP 模式——音质骤降、对方可能察觉。捕获对方声音请改选 <strong>BlackHole</strong>；只想录你自己建议用<strong>内建麦克风</strong>。
+        </div>
+      )}
 
       {/* Language selector */}
       <div className="flex gap-2">
@@ -413,58 +567,66 @@ function VoiceTab() {
         </div>
       )}
 
-      {/* Listen button */}
-      <button
-        onClick={toggle}
-        className="w-full py-3 rounded-lg text-sm font-semibold transition-all"
+      {/* Listening indicator */}
+      <div
+        className="w-full py-3 rounded-lg text-sm font-semibold text-center transition-all"
         style={{
-          background: listening ? 'rgba(220,38,38,0.15)' : 'rgba(59,130,246,0.15)',
-          color: listening ? '#f87171' : '#7dd3fc',
-          border: `1px solid ${listening ? 'rgba(220,38,38,0.4)' : 'rgba(59,130,246,0.4)'}`,
-          cursor: 'pointer'
+          background: listening ? 'rgba(220,38,38,0.15)' : 'rgba(59,130,246,0.08)',
+          color: listening ? '#f87171' : '#475569',
+          border: `1px solid ${listening ? 'rgba(220,38,38,0.4)' : '#1e1e2e'}`,
         }}
       >
-        {listening ? '● 停止监听' : '开始语音监听'}
-      </button>
+        {transcribing ? '⏳ 转写中…' : listening ? '● 录音中... 按 ⌘⌥X 停止' : '按 ⌘⌥X 开始录音'}
+      </div>
 
-      {/* Transcript area header with send button */}
-      {transcriptLines.length > 0 && (
+      {/* Editable draft area */}
+      <div className="flex flex-col flex-1 gap-2" style={{ minHeight: 0 }}>
         <div className="flex items-center justify-between">
-          <span className="text-xs" style={{ color: '#334155' }}>转录内容</span>
+          <span className="text-xs" style={{ color: '#334155' }}>
+            {listening ? '录音中…(停止后转写)' : draftText ? '转写完成 — 可编辑后发送' : '转写结果'}
+          </span>
           <div className="flex gap-2">
-            <button
-              onClick={() => setTranscriptLines([])}
-              className="px-2 py-0.5 text-xs rounded"
-              style={{ background: '#1e1e2e', color: '#475569', border: '1px solid #2d2d44', cursor: 'pointer' }}
-            >
-              清空
-            </button>
-            <button
-              onClick={() => {
-                const text = transcriptLines.slice(-4).join(' ').trim()
-                if (text) window.electronAPI.autoAsk(text)
-              }}
-              className="px-2 py-0.5 text-xs rounded font-medium"
-              style={{ background: 'rgba(124,58,237,0.2)', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.4)', cursor: 'pointer' }}
-            >
-              发送到AI
-            </button>
+            {draftText && (
+              <button
+                onClick={() => setDraftText('')}
+                className="px-2 py-0.5 text-xs rounded"
+                style={{ background: '#1e1e2e', color: '#475569', border: '1px solid #2d2d44', cursor: 'pointer' }}
+              >
+                清空
+              </button>
+            )}
           </div>
         </div>
-      )}
-
-      {/* Transcript scroll area */}
-      <div
-        ref={transcriptRef}
-        className="flex-1 rounded-lg p-3 overflow-y-auto text-xs leading-relaxed"
-        style={{ background: '#0a0a12', border: '1px solid #1a1a2e', color: '#64748b', minHeight: 0 }}
-      >
-        {transcriptLines.length === 0 ? (
-          <span className="italic" style={{ color: '#1e293b' }}>转录内容将在这里实时显示...</span>
-        ) : (
-          transcriptLines.map((line, i) => <div key={i} className="mb-1">{line}</div>)
-        )}
+        <textarea
+          ref={draftRef}
+          value={draftText}
+          onChange={(e) => setDraftText(e.target.value)}
+          readOnly={listening}
+          placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 ⌘⌥X 录音，转写结果将出现在这里...'}
+          className="flex-1 rounded-lg p-3 text-xs leading-relaxed resize-none outline-none"
+          style={{
+            background: '#0a0a12',
+            border: `1px solid ${listening ? 'rgba(220,38,38,0.3)' : '#1a1a2e'}`,
+            color: '#e2e8f0',
+            minHeight: 80,
+          }}
+        />
       </div>
+
+      {/* Send button */}
+      <button
+        onClick={sendToAI}
+        disabled={!draftText.trim()}
+        className="w-full py-3 rounded-lg text-sm font-semibold transition-all"
+        style={{
+          background: draftText.trim() ? 'rgba(124,58,237,0.2)' : 'rgba(30,30,46,0.6)',
+          color: draftText.trim() ? '#a78bfa' : '#334155',
+          border: `1px solid ${draftText.trim() ? 'rgba(124,58,237,0.4)' : '#1e1e2e'}`,
+          cursor: draftText.trim() ? 'pointer' : 'default',
+        }}
+      >
+        发送到 AI
+      </button>
     </div>
   )
 }
@@ -479,7 +641,43 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [asrBaseUrl, setAsrBaseUrl] = useState('https://api.openai.com/v1')
   const [asrModel, setAsrModel] = useState('whisper-1')
   const [overlayOpacity, setOverlayOpacity] = useState(0.94)
+  const [screenshotMode, setScreenshotMode] = useState<'direct' | 'ocr'>('direct')
+  const [screenshotPrompt, setScreenshotPrompt] = useState('')
+  const [resume, setResume] = useState('')
+  const [answerLang, setAnswerLang] = useState<'zh' | 'en' | 'auto'>('zh')
   const [saved, setSaved] = useState(false)
+  const [saveErr, setSaveErr] = useState('')
+  const [llmTest, setLlmTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
+  const [visionTest, setVisionTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
+  const [asrTest, setAsrTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
+
+  const testLlm = async () => {
+    setLlmTest({ st: 'testing', msg: '' })
+    try {
+      const r = await window.electronAPI.testLLM({ apiKey, baseUrl, model })
+      setLlmTest({ st: r.ok ? 'ok' : 'fail', msg: r.message })
+    } catch (e) {
+      setLlmTest({ st: 'fail', msg: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  const testVision = async () => {
+    setVisionTest({ st: 'testing', msg: '' })
+    try {
+      const r = await window.electronAPI.testVision({ apiKey, baseUrl, visionModel })
+      setVisionTest({ st: r.ok ? 'ok' : 'fail', msg: r.message })
+    } catch (e) {
+      setVisionTest({ st: 'fail', msg: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  const testAsr = async () => {
+    setAsrTest({ st: 'testing', msg: '' })
+    try {
+      const r = await window.electronAPI.testASR({ apiKey: asrApiKey, baseUrl: asrBaseUrl, model: asrModel })
+      setAsrTest({ st: r.ok ? 'ok' : 'fail', msg: r.message })
+    } catch (e) {
+      setAsrTest({ st: 'fail', msg: e instanceof Error ? e.message : String(e) })
+    }
+  }
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
@@ -491,11 +689,21 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       if (cfg.asrBaseUrl) setAsrBaseUrl(cfg.asrBaseUrl)
       if (cfg.asrModel) setAsrModel(cfg.asrModel)
       if (cfg.overlayOpacity !== undefined) setOverlayOpacity(cfg.overlayOpacity)
+      if (cfg.screenshotMode) setScreenshotMode(cfg.screenshotMode)
+      if (cfg.screenshotPrompt !== undefined) setScreenshotPrompt(cfg.screenshotPrompt)
+      if (cfg.resume !== undefined) setResume(cfg.resume)
+      if (cfg.answerLang === 'zh' || cfg.answerLang === 'en' || cfg.answerLang === 'auto') setAnswerLang(cfg.answerLang)
     })
   }, [])
 
   const save = () => {
-    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity: String(overlayOpacity) })
+    // Light validation so an obviously-broken config doesn't get a false '✓ 已保存'. Non-empty key
+    // + well-formed URLs only — never gate on a live test (that would break editing offline).
+    if (!apiKey.trim()) { setSaveErr('请填写 API Key'); return }
+    try { new URL(baseUrl) } catch { setSaveErr('Base URL 需形如 https://api.example.com'); return }
+    if (asrApiKey.trim()) { try { new URL(asrBaseUrl) } catch { setSaveErr('ASR Base URL 需形如 https://api.example.com'); return } }
+    setSaveErr('')
+    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode, screenshotPrompt, resume, answerLang })
     setSaved(true)
     onSaved?.()
     setTimeout(() => setSaved(false), 2000)
@@ -523,10 +731,118 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           onChange={(e) => {
             const v = parseFloat(e.target.value)
             setOverlayOpacity(v)
-            window.electronAPI.setConfig({ overlayOpacity: String(v) })
+            window.electronAPI.setConfig({ overlayOpacity: v })
           }}
           className="w-full"
           style={{ accentColor: '#3b82f6' }}
+        />
+      </div>
+
+      {/* Screenshot mode */}
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          截图解题模式（⌘⌥S）
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          {screenshotMode === 'direct'
+            ? '直接解答：视觉模型一次调用直接流式给出答案，最快'
+            : '先识别：先 OCR 出可编辑文字，确认/纠错后再发给 AI'}
+        </div>
+        <div className="flex gap-2">
+          {([['direct', '直接解答（快）'], ['ocr', '先识别可编辑']] as ['direct' | 'ocr', string][]).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => { setScreenshotMode(m); window.electronAPI.setConfig({ screenshotMode: m }) }}
+              className="px-3 py-1 text-xs rounded transition-colors"
+              style={{
+                background: screenshotMode === m ? '#1d4ed8' : '#1e1e2e',
+                color: screenshotMode === m ? '#bfdbfe' : '#475569',
+                border: `1px solid ${screenshotMode === m ? '#3b82f6' : '#2d2d44'}`,
+                cursor: 'pointer'
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Custom prompt for direct-solve mode — sent with the image to the vision model */}
+        {screenshotMode === 'direct' && (
+          <div className="mt-2">
+            <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+              截图解答 Prompt（随图片发给视觉模型）
+            </label>
+            <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+              留空则用默认指令。可自定义解题风格。
+            </div>
+            <textarea
+              value={screenshotPrompt}
+              onChange={(e) => setScreenshotPrompt(e.target.value)}
+              onBlur={(e) => { e.target.style.borderColor = '#1e1e3a'; window.electronAPI.setConfig({ screenshotPrompt }) }}
+              placeholder="例如：分析并解答图片中的题目，先给出思路，再给出实现，优先 LeetCode 风格"
+              rows={3}
+              spellCheck={false}
+              className="w-full rounded-lg px-3 py-2 text-xs resize-none outline-none transition-colors"
+              style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#e2e8f0', lineHeight: '1.6', fontFamily: 'inherit' }}
+              onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop: '1px solid #1e1e2e' }} />
+
+      {/* Answer personalization: language + candidate background */}
+      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#34d399' }}>
+        回答个性化
+      </div>
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          回答语言
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          {answerLang === 'zh'
+            ? '固定用中文回答（默认）'
+            : answerLang === 'en'
+              ? '固定用英文回答 — 英文面试选这个'
+              : '跟随提问语言：中文题中文答、英文题英文答'}
+        </div>
+        <div className="flex gap-2">
+          {([['zh', '中文'], ['en', 'English'], ['auto', '跟随提问']] as ['zh' | 'en' | 'auto', string][]).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => { setAnswerLang(m); window.electronAPI.setConfig({ answerLang: m }) }}
+              className="px-3 py-1 text-xs rounded transition-colors"
+              style={{
+                background: answerLang === m ? '#1d4ed8' : '#1e1e2e',
+                color: answerLang === m ? '#bfdbfe' : '#475569',
+                border: `1px solid ${answerLang === m ? '#3b82f6' : '#2d2d44'}`,
+                cursor: 'pointer'
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
+          个人背景 / 简历要点（可选）
+        </label>
+        <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
+          粘贴技术栈、项目经历、目标级别等。AI 回答"做过什么项目"这类个人问题时会以第一人称贴合这份背景，而不是编标准答案。
+        </div>
+        <textarea
+          value={resume}
+          onChange={(e) => setResume(e.target.value)}
+          onBlur={(e) => { e.target.style.borderColor = '#1e1e3a'; window.electronAPI.setConfig({ resume }) }}
+          placeholder="例如：5 年后端，主做 Go/K8s；负责过日均 10 亿请求的网关系统，主导过一次跨机房容灾演练…"
+          rows={5}
+          spellCheck={false}
+          className="w-full rounded-lg px-3 py-2 text-xs resize-y outline-none transition-colors"
+          style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#e2e8f0', lineHeight: '1.6', fontFamily: 'inherit' }}
+          onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
         />
       </div>
 
@@ -561,7 +877,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       />
       <Field
         label="视觉模型（截图解题）"
-        hint="支持图像输入的模型，用于 Ctrl+Shift+S 截图模式"
+        hint="支持图像输入的模型，用于 ⌘⌥S 截图模式"
         value={visionModel}
         onChange={setVisionModel}
         placeholder="gpt-4o / deepseek-vl2"
@@ -589,6 +905,9 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           ))}
         </div>
       </div>
+
+      <TestRow label="测试问答模型" onTest={testLlm} state={llmTest} />
+      <TestRow label="测试视觉模型" onTest={testVision} state={visionTest} />
 
       {/* Divider */}
       <div style={{ borderTop: '1px solid #1e1e2e' }} />
@@ -627,6 +946,7 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           {[
             { label: 'Groq (免费)', asrBaseUrl: 'https://api.groq.com/openai/v1', asrModel: 'whisper-large-v3' },
             { label: 'OpenAI Whisper', asrBaseUrl: 'https://api.openai.com/v1', asrModel: 'whisper-1' },
+            { label: '硅基流动', asrBaseUrl: 'https://api.siliconflow.cn/v1', asrModel: 'FunAudioLLM/SenseVoiceSmall' },
           ].map((p) => (
             <button
               key={p.label}
@@ -640,6 +960,8 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
         </div>
       </div>
 
+      <TestRow label="测试 ASR 连接" onTest={testAsr} state={asrTest} />
+
       <button
         onClick={save}
         className="px-4 py-2 text-sm rounded-lg font-medium mt-2 transition-colors"
@@ -647,23 +969,47 @@ function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       >
         {saved ? '✓ 已保存' : '保存设置'}
       </button>
+      {saveErr && (
+        <div className="text-xs" style={{ color: '#f87171' }}>✗ {saveErr}</div>
+      )}
     </div>
   )
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
-function Pill({ ok, label }: { ok: boolean; label: string }) {
+function TestRow({
+  label,
+  onTest,
+  state
+}: {
+  label: string
+  onTest: () => void
+  state: { st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }
+}) {
+  const color = state.st === 'ok' ? '#4ade80' : state.st === 'fail' ? '#f87171' : '#94a3b8'
   return (
-    <span
-      className="text-xs px-2 py-0.5 rounded-full"
-      style={{
-        background: ok ? 'rgba(22, 163, 74, 0.2)' : 'rgba(30, 30, 50, 0.6)',
-        color: ok ? '#4ade80' : '#334155',
-        border: `1px solid ${ok ? 'rgba(74, 222, 128, 0.3)' : 'rgba(50, 50, 80, 0.5)'}`
-      }}
-    >
-      {label}
-    </span>
+    <div className="flex items-center gap-2 flex-wrap">
+      <button
+        onClick={onTest}
+        disabled={state.st === 'testing'}
+        className="px-3 py-1.5 text-xs rounded transition-colors flex-shrink-0"
+        style={{
+          background: '#13213a',
+          color: '#7dd3fc',
+          border: '1px solid #1e3a5f',
+          cursor: state.st === 'testing' ? 'default' : 'pointer',
+          opacity: state.st === 'testing' ? 0.6 : 1
+        }}
+      >
+        {state.st === 'testing' ? '测试中…' : label}
+      </button>
+      {(state.st === 'ok' || state.st === 'fail') && state.msg && (
+        <span className="text-xs" style={{ color }}>
+          {state.st === 'ok' ? '✓ ' : '✗ '}
+          {state.msg}
+        </span>
+      )}
+    </div>
   )
 }
 

@@ -20,7 +20,7 @@ const ignore = [
 console.log('Building...')
 const result = await packager({
   dir: root,
-  name: 'Interview Assistant',
+  name: 'Helper',
   platform: 'win32',
   arch: 'x64',
   out: join(root, 'dist'),

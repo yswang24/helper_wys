@@ -15,3 +15,10 @@ pnpm-debug.log*
 Thumbs.db
 
 .claude/
+
+# 含密钥的本地调试脚本，勿提交
+test_nativeimage.js
+screenshot_*.png
+
+# TypeScript 增量编译产物
+*.tsbuildinfo

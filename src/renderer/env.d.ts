@@ -8,10 +8,21 @@ interface LLMConfig {
   model: string
   visionModel: string
   jobDescription: string
+  // Candidate background/resume highlights — injected into the system prompt
+  resume?: string
+  // Answer language: 'zh' fixed Chinese / 'en' fixed English / 'auto' follow the question
+  answerLang?: string
+  // Custom prompt sent with the screenshot in direct-solve mode (⌘⌥S)
+  screenshotPrompt?: string
   // ASR (Whisper)
   asrApiKey: string
   asrBaseUrl: string
   asrModel: string
+  // Overlay appearance
+  overlayOpacity?: number
+  // Screenshot (⌘⌥S): 'direct' = vision model streams the answer in one call; 'ocr' = extract
+  // editable text first, then send to the LLM.
+  screenshotMode?: 'direct' | 'ocr'
 }
 
 interface AppStatus {
@@ -19,6 +30,7 @@ interface AppStatus {
   overlayVisible: boolean
   platform: string
   version: string
+  failedShortcuts: string[]
 }
 
 interface TranscriptData {
@@ -34,52 +46,51 @@ interface ElectronAPI {
   platform: string
   // Config
   getConfig: () => Promise<LLMConfig>
+  getPublicConfig: () => Promise<{ overlayOpacity?: number; screenshotMode?: 'direct' | 'ocr' }>
   setConfig: (partial: Partial<LLMConfig>) => void
+  testLLM: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<{ ok: boolean; message: string }>
+  testVision: (cfg: { apiKey: string; baseUrl: string; visionModel: string }) => Promise<{ ok: boolean; message: string }>
+  testASR: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<{ ok: boolean; message: string }>
   // LLM
-  askQuestion: (question: string, history?: { question: string; answer: string }[]) => void
+  askQuestion: (question: string) => void
   clearAnswer: () => void
   stopAnswer: () => void
-  onAnswerStart: (cb: (question: string) => void) => UnlistenFn
-  onAnswerChunk: (cb: (chunk: string) => void) => UnlistenFn
-  onAnswerDone: (cb: () => void) => UnlistenFn
-  onAnswerError: (cb: (msg: string) => void) => UnlistenFn
+  onAnswerStart: (cb: (data: { id: number; question: string }) => void) => UnlistenFn
+  onAnswerChunk: (cb: (data: { id: number; chunk: string }) => void) => UnlistenFn
+  onAnswerDone: (cb: (data: { id: number }) => void) => UnlistenFn
+  onAnswerError: (cb: (data: { id: number | null; message: string }) => void) => UnlistenFn
   onAnswerClear: (cb: () => void) => UnlistenFn
+  // Overlay appearance
+  onOverlayOpacity: (cb: (opacity: number) => void) => UnlistenFn
   // ASR – overlay side
   sendTranscript: (data: TranscriptData) => void
   autoAsk: (question: string) => void
   onAsrStart: (cb: () => void) => UnlistenFn
   onAsrStop: (cb: () => void) => UnlistenFn
-  onAsrToggle: (cb: () => void) => UnlistenFn
+  onAsrPttToggle: (cb: () => void) => UnlistenFn
   // ASR – main window side
   startListening: () => void
   stopListening: () => void
-  setAsrLang: (lang: string) => void
-  setAudioSource: (source: 'mic' | 'system') => void
   onTranscript: (cb: (data: TranscriptData) => void) => UnlistenFn
-  // ASR – overlay side
-  onAsrLangChange: (cb: (lang: string) => void) => UnlistenFn
-  onAsrSourceChange: (cb: (source: string) => void) => UnlistenFn
   // Whisper transcription (request-response)
   transcribeChunk: (audio: ArrayBuffer, mimeType: string, lang: string) => Promise<string>
   // Clipboard
   copyText: (text: string) => void
   // Screenshot / coding mode
-  submitScreenshot: (region: { x: number; y: number; w: number; h: number }) => void
-  cancelScreenshot: () => void
-  // Image re-ask with context
-  reaskImageWithContext: (context: string) => void
+  submitScreenshot: (region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) => void
   // Image text extraction
   onImageText: (cb: (text: string) => void) => UnlistenFn
   onImageStatus: (cb: (status: string) => void) => UnlistenFn
   onImageError: (cb: (msg: string) => void) => UnlistenFn
-  askExtractedText: (text: string, history?: { question: string; answer: string }[]) => void
+  askExtractedText: (text: string) => void
 }
 
 declare global {
   interface Window {
     electronAPI: ElectronAPI
-    // Browser SpeechRecognition API
-    SpeechRecognition: typeof SpeechRecognition
-    webkitSpeechRecognition: typeof SpeechRecognition
   }
 }
+
+// `export {}` makes this file a module so the `declare global` augmentation above
+// actually applies (otherwise window.electronAPI is untyped across the renderer).
+export {}

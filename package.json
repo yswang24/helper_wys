@@ -1,14 +1,16 @@
 {
-  "name": "interview-cheater",
+  "name": "helper",
   "version": "1.0.0",
-  "description": "Interview assistance tool with stealth overlay",
+  "description": "A lightweight desktop helper",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "npm run build && node scripts/package.mjs",
-    "package:installer": "npm run build && electron-builder --win"
+    "package:installer": "npm run build && electron-builder --win",
+    "package:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
     "openai": "^6.38.0",
@@ -31,9 +33,9 @@
     "vite": "^5.0.0"
   },
   "build": {
-    "appId": "com.interview.assistant",
-    "productName": "Interview Assistant",
-    "copyright": "Copyright © 2024 Interview Assistant",
+    "appId": "com.helper.app",
+    "productName": "Helper",
+    "copyright": "Copyright © 2024 Helper",
     "asar": true,
     "directories": {
       "output": "dist",
@@ -70,7 +72,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Interview Assistant"
+      "shortcutName": "Helper"
     },
     "mac": {
       "target": [
@@ -82,7 +84,10 @@
           ]
         }
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "用于将语音转写为面试问题文本。"
+      }
     },
     "linux": {
       "target": "AppImage"
