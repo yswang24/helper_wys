@@ -10,5 +10,6 @@
     "noEmit": false,
     "outDir": "out"
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/__smoke__/**", "test/**"]
 }
