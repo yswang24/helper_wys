@@ -11,6 +11,8 @@ import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, force
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 import { splitConfigSet, hasAsrField, asrPatch, mergeConfigForPersist } from './config-merge'
+import { computeNativeRect, computeCropRect } from './screenshot/capture'
+import type { ScreenRegion } from '../shared/ipc'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -671,21 +673,12 @@ ipcMain.on('clipboard:copy', (_e, text: string) => {
 
 // ── IPC: screenshot / coding mode ────────────────────────────────────────────
 
-type ScreenRegion = { x: number; y: number; w: number; h: number; vw?: number; vh?: number }
-
 // macOS native region capture: screencapture grabs ONLY the requested rect, so we avoid rendering
 // the entire screen at retina resolution and then cropping (the desktopCapturer cost). Coordinates
 // are global logical points; the selector's viewport (vw/vh) is mapped to the display's logical
 // bounds in case they differ (notched/scaled Macs). Returns base64 JPEG.
 async function captureRegionNative(display: Electron.Display, region: ScreenRegion): Promise<string> {
-  const vw = region.vw || display.bounds.width
-  const vh = region.vh || display.bounds.height
-  const sx = display.bounds.width / vw
-  const sy = display.bounds.height / vh
-  const gx = Math.round(display.bounds.x + region.x * sx)
-  const gy = Math.round(display.bounds.y + region.y * sy)
-  const gw = Math.max(1, Math.round(region.w * sx))
-  const gh = Math.max(1, Math.round(region.h * sy))
+  const { gx, gy, gw, gh } = computeNativeRect(display.bounds, region)
   const tmpPng = join(tmpdir(), `helper_shot_${Date.now()}.png`)
   console.log(`[Screenshot] native -R ${gw}x${gh}@${gx},${gy}`)
   // The await is INSIDE the try so the finally still unlinks if screencapture exits non-zero after
@@ -734,14 +727,7 @@ async function captureRegionDesktop(display: Electron.Display, region: ScreenReg
   }
   // Map selector(viewport) coords → thumbnail pixels using the selector's OWN reported viewport
   // size. display.bounds can differ from the actual viewport on notched/scaled Macs.
-  const vw = region.vw || width
-  const vh = region.vh || height
-  const scaleX = tsize.width / vw
-  const scaleY = tsize.height / vh
-  const cx = Math.max(0, Math.round(region.x * scaleX))
-  const cy = Math.max(0, Math.round(region.y * scaleY))
-  const cw = Math.min(Math.round(region.w * scaleX), tsize.width - cx)
-  const ch = Math.min(Math.round(region.h * scaleY), tsize.height - cy)
+  const { cx, cy, cw, ch } = computeCropRect(tsize, display.bounds, region)
   let cropped = thumb.crop({ x: cx, y: cy, width: cw, height: ch })
   const maxSize = 2000
   const cropW = cropped.getSize().width
