@@ -3,7 +3,7 @@
 // Channels are keyed by (name, DIRECTION): several names are reused across directions
 // (`llm:clear`, `asr:start`, `asr:stop`, `asr:transcript` are BOTH a renderer→main send AND
 // a main→renderer event), so a flat map would silently collapse them. Three maps keep them
-// distinct. Distinct channel NAMES: 30. Distinct (name, direction) tuples: 37 (7 + 16 + 14).
+// distinct. Distinct channel NAMES: 33. Distinct (name, direction) tuples: 37 (7 + 16 + 14).
 //
 // Config wire types come from the canonical shared/config.ts (PublicConfig, ScreenshotMode).
 // `FullConfig` (the flat config:get response) stays here as an IPC-layer type.
