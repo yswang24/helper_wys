@@ -1,8 +1,5 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, session, desktopCapturer, screen, clipboard, Tray, Menu, nativeImage, systemPreferences } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, session, screen, clipboard, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
-import { tmpdir } from 'os'
-import { execFile } from 'child_process'
-import { unlink } from 'fs/promises'
 import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
@@ -11,8 +8,7 @@ import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, force
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 import { splitConfigSet, hasAsrField, asrPatch, mergeConfigForPersist } from './config-merge'
-import { computeNativeRect, computeCropRect } from './screenshot/capture'
-import type { ScreenRegion } from '../shared/ipc'
+import { registerScreenshotIpc } from './screenshot'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -673,113 +669,15 @@ ipcMain.on('clipboard:copy', (_e, text: string) => {
 
 // ── IPC: screenshot / coding mode ────────────────────────────────────────────
 
-// macOS native region capture: screencapture grabs ONLY the requested rect, so we avoid rendering
-// the entire screen at retina resolution and then cropping (the desktopCapturer cost). Coordinates
-// are global logical points; the selector's viewport (vw/vh) is mapped to the display's logical
-// bounds in case they differ (notched/scaled Macs). Returns base64 JPEG.
-async function captureRegionNative(display: Electron.Display, region: ScreenRegion): Promise<string> {
-  const { gx, gy, gw, gh } = computeNativeRect(display.bounds, region)
-  const tmpPng = join(tmpdir(), `helper_shot_${Date.now()}.png`)
-  console.log(`[Screenshot] native -R ${gw}x${gh}@${gx},${gy}`)
-  // The await is INSIDE the try so the finally still unlinks if screencapture exits non-zero after
-  // writing a partial/0-byte file (otherwise those orphans accumulate in tmpdir on every failure).
-  try {
-    await new Promise<void>((resolve, reject) => {
-      // Absolute path: a packaged GUI app's PATH may not include /usr/sbin. -x = silent, -R = region.
-      execFile('/usr/sbin/screencapture', ['-x', '-R', `${gx},${gy},${gw},${gh}`, tmpPng], (err) =>
-        err ? reject(err) : resolve()
-      )
-    })
-    let img = nativeImage.createFromPath(tmpPng)
-    if (img.isEmpty()) throw new Error('screencapture 输出为空')
-    const maxSize = 2000
-    const { width, height } = img.getSize()
-    if (width > maxSize || height > maxSize) {
-      const scale = maxSize / Math.max(width, height)
-      img = img.resize({ width: Math.round(width * scale), height: Math.round(height * scale) })
-    }
-    return img.toJPEG(82).toString('base64')
-  } finally {
-    unlink(tmpPng).catch(() => { /* ignore */ })
-  }
-}
-
-// Cross-platform fallback: full-screen desktopCapturer thumbnail, then crop to the selection.
-// Returns base64 JPEG.
-async function captureRegionDesktop(display: Electron.Display, region: ScreenRegion): Promise<string> {
-  const { width, height } = display.bounds  // logical pixels (same space as selector coords)
-  // Timeout guard — desktopCapturer can hang on macOS without screen recording permission
-  const capturePromise = desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: { width: Math.round(width * display.scaleFactor), height: Math.round(height * display.scaleFactor) }
-  })
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('截图超时，请检查屏幕录制权限')), 10000)
-  )
-  const sources = await Promise.race([capturePromise, timeoutPromise])
-  // Pick the source matching our display — desktopCapturer doesn't guarantee sources[0] is it.
-  const source = sources.find((s) => String(s.display_id) === String(display.id)) ?? sources[0]
-  if (!source) throw new Error('无法获取屏幕截图')
-  const thumb = source.thumbnail
-  const tsize = thumb.getSize()
-  if (tsize.width === 0 || tsize.height === 0) {
-    throw new Error('截屏内容为空 —— 请到 系统设置 → 隐私与安全性 → 屏幕录制，给运行本应用的程序（开发时是终端/VS Code，打包后是 Helper）授权后重启')
-  }
-  // Map selector(viewport) coords → thumbnail pixels using the selector's OWN reported viewport
-  // size. display.bounds can differ from the actual viewport on notched/scaled Macs.
-  const { cx, cy, cw, ch } = computeCropRect(tsize, display.bounds, region)
-  let cropped = thumb.crop({ x: cx, y: cy, width: cw, height: ch })
-  const maxSize = 2000
-  const cropW = cropped.getSize().width
-  const cropH = cropped.getSize().height
-  if (cropW > maxSize || cropH > maxSize) {
-    const scale = maxSize / Math.max(cropW, cropH)
-    cropped = cropped.resize({ width: Math.round(cropW * scale), height: Math.round(cropH * scale) })
-  }
-  return cropped.toJPEG(82).toString('base64')
-}
-
-ipcMain.on('screenshot:submit', async (_e, region: ScreenRegion) => {
-  // Close the selector FIRST — otherwise its "截图中..." can stay stuck if anything below fails
-  selectorWindow?.close()
-  if (!overlayWindow) return
-
-  try {
-    // Permission precheck (macOS): when screen recording isn't granted, desktopCapturer returns a
-    // wallpaper-only/blank image with a NON-zero size that slips past the zero-size check and yields
-    // a nonsense answer. Fail loudly here instead. (TCC status can lag a mid-session revoke, so the
-    // zero-size and native-empty checks below stay as backstops.)
-    if (process.platform === 'darwin' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
-      throw new Error('未授权屏幕录制 —— 请到 系统设置 → 隐私与安全性 → 屏幕录制，给本应用授权后重启（开发时是终端/VS Code，打包后是 Helper）')
-    }
-
-    // Crop against the display the selector actually covered (multi-monitor) — not always primary.
-    const display = screen.getAllDisplays().find((d) => d.id === selectorDisplayId) ?? screen.getPrimaryDisplay()
-
-    let imageBase64: string
-    if (process.platform === 'darwin') {
-      try {
-        imageBase64 = await captureRegionNative(display, region)
-      } catch (e) {
-        console.warn('[Screenshot] native screencapture failed, falling back to desktopCapturer:', e)
-        imageBase64 = await captureRegionDesktop(display, region)
-      }
-    } else {
-      imageBase64 = await captureRegionDesktop(display, region)
-    }
-    console.log(`[Screenshot] region ${region.w}x${region.h} → ${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
-
-    // 'direct' (default): one call — vision model streams the answer straight to the overlay.
-    // 'ocr': two calls — extract editable text first, user reviews, then sends to the LLM.
-    const mode = loadPersistedConfig().screenshotMode ?? 'direct'
-    if (mode === 'ocr') {
-      ensureOverlayVisible()  // OCR path doesn't go through startStreamSafely — surface it too
-      extractImageText(imageBase64, overlayWindow)
-    } else {
-      startStreamSafely((win) => streamImageAnswer(imageBase64, win))
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    overlayWindow?.webContents.send('image:error', `截图失败: ${msg}`)
-  }
+// Capture math + screencapture/desktopCapturer live in ./screenshot; the handler is registered
+// here (module-eval, before windows exist) with getter deps so it always sees the live windows.
+registerScreenshotIpc({
+  getOverlayWindow: () => overlayWindow,
+  getSelectorWindow: () => selectorWindow,
+  getSelectorDisplayId: () => selectorDisplayId,
+  ensureOverlayVisible,
+  startStreamSafely,
+  streamImageAnswer,
+  extractImageText,
+  loadPersistedConfig
 })

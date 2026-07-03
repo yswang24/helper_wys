@@ -1,5 +1,20 @@
-import { describe, it, expect } from 'vitest'
-import { computeNativeRect, computeCropRect } from './capture'
+import { describe, it, expect, vi } from 'vitest'
+
+// Fakes for the electron/node boundaries so captureRegionNative's finally-unlink is testable.
+const unlinkMock = vi.hoisted(() => vi.fn(() => Promise.resolve()))
+vi.mock('electron', () => ({
+  nativeImage: { createFromPath: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }) }) },
+  desktopCapturer: { getSources: () => Promise.resolve([]) }
+}))
+vi.mock('child_process', () => ({
+  // screencapture "succeeds" (writes nothing); nativeImage.isEmpty() then throws.
+  execFile: (_cmd: string, _args: string[], cb: (e: Error | null) => void) => cb(null)
+}))
+vi.mock('fs/promises', () => ({ unlink: unlinkMock }))
+
+import { computeNativeRect, computeCropRect, captureRegionNative } from './capture'
+
+const fakeDisplay = { bounds: { x: 0, y: 0, width: 100, height: 100 }, scaleFactor: 1 } as unknown as Electron.Display
 
 // Characterization tests: lock the exact alignment math (currently untested and user-visible)
 // before the capture module moves in Step 2.2.
@@ -55,5 +70,13 @@ describe('computeCropRect', () => {
       { x: 10, y: 10, w: 20, h: 20 }
     )
     expect(r).toEqual({ cx: 10, cy: 10, cw: 20, ch: 20 })
+  })
+})
+
+describe('captureRegionNative cleanup', () => {
+  it('unlinks the temp PNG even when capture fails (empty image)', async () => {
+    unlinkMock.mockClear()
+    await expect(captureRegionNative(fakeDisplay, { x: 0, y: 0, w: 10, h: 10 })).rejects.toThrow()
+    expect(unlinkMock).toHaveBeenCalledOnce()
   })
 })
