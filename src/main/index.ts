@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, session, screen, clipboard, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, session, screen, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
@@ -10,6 +10,10 @@ import { loadPersistedConfig, persistConfig } from './store'
 import { registerScreenshotIpc } from './screenshot'
 import { registerConfigIpc } from './config'
 import { createStreamSafe } from './stream-safe'
+import { registerAppIpc } from './ipc/app'
+import { registerClipboardIpc } from './ipc/clipboard'
+import { registerLlmIpc } from './ipc/llm'
+import { registerAsrIpc } from './ipc/asr'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -519,13 +523,7 @@ ipcMain.on('overlay:drag-end', () => {
 })
 
 // ── IPC: app status ───────────────────────────────────────────────────────────
-ipcMain.handle('app:get-status', () => ({
-  contentProtection: true,
-  overlayVisible: overlayWindow?.isVisible() ?? false,
-  platform: process.platform,
-  version: app.getVersion(),
-  failedShortcuts
-}))
+registerAppIpc({ getOverlayWindow: () => overlayWindow, failedShortcuts })
 
 // ── IPC: config ───────────────────────────────────────────────────────────────
 // Handlers live in ./config; registered here (module-eval) with injected deps.
@@ -552,54 +550,22 @@ const { startStreamSafely } = createStreamSafe({
   ensureOverlayVisible
 })
 
-ipcMain.on('llm:ask', (_e, question: string) => {
-  if (!overlayWindow) return
-  startStreamSafely((win) => streamAnswer(question, win))
+registerLlmIpc({
+  getOverlayWindow: () => overlayWindow,
+  startStreamSafely,
+  streamAnswer,
+  stopStreaming,
+  clearHistory
 })
 
-ipcMain.on('llm:clear', () => {
-  stopStreaming()  // abort any in-flight stream so it doesn't keep generating into an empty UI
-  clearHistory()
-  overlayWindow?.webContents.send('llm:clear')
+registerAsrIpc({
+  getOverlayWindow: () => overlayWindow,
+  startStreamSafely,
+  streamAnswer,
+  transcribeAudio
 })
 
-ipcMain.on('llm:stop', () => {
-  stopStreaming()
-})
-
-// Overlay sends extracted text → LLM answers
-ipcMain.on('llm:ask-extracted', (_e, text: string) => {
-  if (!overlayWindow) return
-  startStreamSafely((win) => streamAnswer(text, win))
-})
-
-// ── IPC: ASR control (main window → overlay) ──────────────────────────────────
-// Main window sends start/stop commands; overlay runs SpeechRecognition
-ipcMain.on('asr:start', () => overlayWindow?.webContents.send('asr:start'))
-ipcMain.on('asr:stop', () => overlayWindow?.webContents.send('asr:stop'))
-
-// Transcript arrives from the main window; forward it to the overlay's transcript panel.
-// (The main window already shows its own draft locally, so it isn't echoed back here.)
-ipcMain.on('asr:transcript', (_e, data: { text: string; isFinal: boolean }) => {
-  overlayWindow?.webContents.send('asr:transcript', data)
-})
-
-// Overlay asks main to auto-submit a transcribed question to LLM
-ipcMain.on('asr:auto-ask', (_e, question: string) => {
-  if (!overlayWindow) return
-  startStreamSafely((win) => streamAnswer(question, win))
-})
-
-// Overlay sends audio chunk → Whisper API → returns text
-ipcMain.handle('asr:transcribe', async (_e, audio: ArrayBuffer, mimeType: string, lang: string) => {
-  const buf = Buffer.from(audio)
-  return transcribeAudio(buf, mimeType, lang || '')
-})
-
-// Overlay requests clipboard copy
-ipcMain.on('clipboard:copy', (_e, text: string) => {
-  clipboard.writeText(text)
-})
+registerClipboardIpc()
 
 // ── IPC: screenshot / coding mode ────────────────────────────────────────────
 
