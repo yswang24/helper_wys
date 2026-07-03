@@ -291,6 +291,9 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
   const streamRef = useRef<MediaStream | null>(null)
   const listeningRef = useRef(false)
   const transcribingRef = useRef(false)  // true while a stopped take is still being transcribed
+  // Safety net for transcribingRef: armed in stopCapture, cleared the instant onstop fires. If
+  // onstop never fires, this force-resets so the voice feature can't be stranded (see stopCapture).
+  const transcribeGuardRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const langRef = useRef(lang)
   const deviceIdRef = useRef(deviceId)
   const devicesRef = useRef(devices)
@@ -378,6 +381,8 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
       const startedAt = Date.now()
       rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
       rec.onstop = async () => {
+        // onstop fired → the stranding safety net (armed in stopCapture) is no longer needed.
+        if (transcribeGuardRef.current) { clearTimeout(transcribeGuardRef.current); transcribeGuardRef.current = undefined }
         const blob = new Blob(chunks, { type: mimeType })
         const durMs = Date.now() - startedAt
         // Diagnostic: bytes-per-second far below ~1KB/s means we captured silence —
@@ -445,7 +450,24 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
     const rec = recorderRef.current
     recorderRef.current = null
     // Stopping triggers rec.onstop, which transcribes the whole take, then clears transcribing
-    if (rec) { setTranscribing(true); transcribingRef.current = true; rec.stop() }
+    if (rec) {
+      setTranscribing(true); transcribingRef.current = true
+      // Safety net: onstop should fire almost immediately after stop(). If it NEVER fires (recorder
+      // already inactive / an edge state), transcribingRef would stay true forever and the ⌘⌥X start
+      // branch would then silently refuse every new take until an app restart — exactly the "第一次
+      // 成功、之后完全没反应" failure. Force-reset after a short grace so it can't get stranded. (Slow
+      // transcription is bounded separately by the 40s watchdog inside onstop, after this is cleared.)
+      if (transcribeGuardRef.current) clearTimeout(transcribeGuardRef.current)
+      transcribeGuardRef.current = setTimeout(() => {
+        transcribeGuardRef.current = undefined
+        if (transcribingRef.current) {
+          console.warn('[ASR] onstop 未在预期内触发，强制复位转写状态（本次录音可能未正常结束）')
+          transcribingRef.current = false; setTranscribing(false)
+          setError('转写状态异常，已自动复位，请重新按 ⌘⌥X 录音')
+        }
+      }, 8000)
+      rec.stop()
+    }
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     window.electronAPI.stopListening()
@@ -457,7 +479,7 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
   const togglingRef = useRef(false)
   useEffect(() => {
     const un = window.electronAPI.onAsrPttToggle(async () => {
-      if (togglingRef.current) return
+      if (togglingRef.current) { console.warn('[ASR] 忽略 ⌘⌥X：上一次开始/停止切换尚未完成'); return }
       togglingRef.current = true
       try {
         if (listeningRef.current) {
@@ -465,7 +487,13 @@ function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettings: () 
         } else {
           // Don't start a new take while the previous one is still transcribing — otherwise the
           // old onstop appends its result into the freshly-cleared new draft and desyncs the UI.
-          if (transcribingRef.current) return
+          // But NEVER fail silently: a stuck transcribingRef used to make ⌘⌥X do nothing with zero
+          // feedback (the reported "第一次成功、之后完全没反应"). Tell the user instead.
+          if (transcribingRef.current) {
+            console.warn('[ASR] 忽略开始录音：上一段仍在转写中（transcribingRef=true）')
+            setError('上一段还在转写中，请等结果出来再按 ⌘⌥X 录音')
+            return
+          }
           setDraftText('')
           await startCapture(langRef.current)
         }
