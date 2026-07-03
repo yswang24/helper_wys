@@ -10,6 +10,7 @@ import { File as NodeFile } from 'node:buffer'
 import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection, setMainWindow } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
+import { splitConfigSet, hasAsrField, asrPatch, mergeConfigForPersist } from './config-merge'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -570,16 +571,9 @@ ipcMain.on('config:set', (_e, partial) => {
   // Update in-memory configs for immediate use. screenshotMode is a main-process behavior flag,
   // not an LLM param — pull it out of llmPartial so it never leaks into the LLM config; it's
   // read straight from the persisted file in the screenshot handler.
-  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode: _screenshotMode, ...llmPartial } = p
+  const { llmPartial, overlayOpacity } = splitConfigSet(p)
   if (Object.keys(llmPartial).length) setConfig(llmPartial as Record<string, string>)
-  if (asrApiKey !== undefined || asrBaseUrl !== undefined || asrModel !== undefined) {
-    const cur = getASRConfig()
-    setASRConfig({
-      apiKey: asrApiKey !== undefined ? (asrApiKey as string) : cur.apiKey,
-      baseUrl: asrBaseUrl !== undefined ? (asrBaseUrl as string) : cur.baseUrl,
-      model: asrModel !== undefined ? (asrModel as string) : cur.model
-    })
-  }
+  if (hasAsrField(p)) setASRConfig(asrPatch(getASRConfig(), p))
   if (overlayOpacity !== undefined) {
     overlayWindow?.webContents.send('overlay:opacity', Number(overlayOpacity))
   }
@@ -588,13 +582,8 @@ ipcMain.on('config:set', (_e, partial) => {
   // Value comparison replaces the old "never persist jobDescription" skip: JD/resume now
   // survive restarts, and an update carrying identical content (the JD sync fires on every
   // typing pause; blur without edits re-sends the same resume) costs no disk rewrite.
-  let persistChanged = false
-  const merged = loadPersistedConfig() as Record<string, unknown>
-  for (const k of Object.keys(p)) {
-    if (p[k] !== undefined && merged[k] !== p[k]) { merged[k] = p[k]; persistChanged = true }
-  }
-  if (overlayOpacity !== undefined) { merged.overlayOpacity = Number(overlayOpacity); persistChanged = true }
-  if (persistChanged) persistConfig(merged as Parameters<typeof persistConfig>[0])
+  const { merged, changed } = mergeConfigForPersist(loadPersistedConfig() as Record<string, unknown>, p)
+  if (changed) persistConfig(merged as Parameters<typeof persistConfig>[0])
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
