@@ -1,4 +1,6 @@
-import type { ScreenshotMode } from './ipc'
+// Screenshot solve mode: 'direct' = vision model streams the answer in one call; 'ocr' =
+// extract editable text first, then send to the LLM. Canonical home (ipc.ts re-imports it).
+export type ScreenshotMode = 'direct' | 'ocr'
 
 // Single canonical config shape, split into domains. Legacy code defined this concept FOUR
 // times (llm.ts LLMConfig, asr.ts ASRConfig, store.ts PersistedConfig, env.d.ts LLMConfig),

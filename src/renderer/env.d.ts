@@ -1,48 +1,26 @@
 /// <reference types="vite/client" />
 
+import type {
+  FullConfig,
+  PublicConfig,
+  AppStatus,
+  TranscriptData,
+  ScreenRegion,
+  OverlayMode,
+  ServiceTestResult,
+  AnswerStart,
+  AnswerChunk,
+  AnswerDone,
+  AnswerError
+} from '../shared/ipc'
+
 type UnlistenFn = () => void
-
-interface LLMConfig {
-  apiKey: string
-  baseUrl: string
-  model: string
-  visionModel: string
-  jobDescription: string
-  // Candidate background/resume highlights — injected into the system prompt
-  resume?: string
-  // Answer language: 'zh' fixed Chinese / 'en' fixed English / 'auto' follow the question
-  answerLang?: string
-  // Custom prompt sent with the screenshot in direct-solve mode (⌘⌥S)
-  screenshotPrompt?: string
-  // ASR (Whisper)
-  asrApiKey: string
-  asrBaseUrl: string
-  asrModel: string
-  // Overlay appearance
-  overlayOpacity?: number
-  // Screenshot (⌘⌥S): 'direct' = vision model streams the answer in one call; 'ocr' = extract
-  // editable text first, then send to the LLM.
-  screenshotMode?: 'direct' | 'ocr'
-}
-
-interface AppStatus {
-  contentProtection: boolean
-  overlayVisible: boolean
-  platform: string
-  version: string
-  failedShortcuts: string[]
-}
-
-interface TranscriptData {
-  text: string
-  isFinal: boolean
-}
 
 interface ElectronAPI {
   // Overlay
   setIgnoreMouse: (ignore: boolean) => void
   requestOverlayMode: (interactive: boolean) => void
-  onOverlayMode: (cb: (mode: 'passthrough' | 'interactive') => void) => UnlistenFn
+  onOverlayMode: (cb: (mode: OverlayMode) => void) => UnlistenFn
   startOverlayDrag: (x: number, y: number) => void
   moveOverlayDrag: (x: number, y: number) => void
   endOverlayDrag: () => void
@@ -50,20 +28,24 @@ interface ElectronAPI {
   getStatus: () => Promise<AppStatus>
   platform: string
   // Config
-  getConfig: () => Promise<LLMConfig>
-  getPublicConfig: () => Promise<{ overlayOpacity?: number; screenshotMode?: 'direct' | 'ocr' }>
-  setConfig: (partial: Partial<LLMConfig>) => void
-  testLLM: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<{ ok: boolean; message: string }>
-  testVision: (cfg: { apiKey: string; baseUrl: string; visionModel: string }) => Promise<{ ok: boolean; message: string }>
-  testASR: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<{ ok: boolean; message: string }>
+  getConfig: () => Promise<FullConfig>
+  getPublicConfig: () => Promise<PublicConfig>
+  setConfig: (partial: Partial<FullConfig>) => void
+  testLLM: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<ServiceTestResult>
+  testVision: (cfg: {
+    apiKey: string
+    baseUrl: string
+    visionModel: string
+  }) => Promise<ServiceTestResult>
+  testASR: (cfg: { apiKey: string; baseUrl: string; model: string }) => Promise<ServiceTestResult>
   // LLM
   askQuestion: (question: string) => void
   clearAnswer: () => void
   stopAnswer: () => void
-  onAnswerStart: (cb: (data: { id: number; question: string }) => void) => UnlistenFn
-  onAnswerChunk: (cb: (data: { id: number; chunk: string }) => void) => UnlistenFn
-  onAnswerDone: (cb: (data: { id: number }) => void) => UnlistenFn
-  onAnswerError: (cb: (data: { id: number | null; message: string }) => void) => UnlistenFn
+  onAnswerStart: (cb: (data: AnswerStart) => void) => UnlistenFn
+  onAnswerChunk: (cb: (data: AnswerChunk) => void) => UnlistenFn
+  onAnswerDone: (cb: (data: AnswerDone) => void) => UnlistenFn
+  onAnswerError: (cb: (data: AnswerError) => void) => UnlistenFn
   onAnswerClear: (cb: () => void) => UnlistenFn
   // Overlay appearance
   onOverlayOpacity: (cb: (opacity: number) => void) => UnlistenFn
@@ -82,7 +64,7 @@ interface ElectronAPI {
   // Clipboard
   copyText: (text: string) => void
   // Screenshot / coding mode
-  submitScreenshot: (region: { x: number; y: number; w: number; h: number; vw?: number; vh?: number }) => void
+  submitScreenshot: (region: ScreenRegion) => void
   // Image text extraction
   onImageText: (cb: (text: string) => void) => UnlistenFn
   onImageStatus: (cb: (status: string) => void) => UnlistenFn

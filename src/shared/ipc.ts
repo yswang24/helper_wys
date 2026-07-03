@@ -5,11 +5,12 @@
 // a main→renderer event), so a flat map would silently collapse them. Three maps keep them
 // distinct. Distinct channel NAMES: 30. Distinct (name, direction) tuples: 37 (7 + 16 + 14).
 //
-// NOTE: `FullConfig` / `PublicConfig` are placeholders here; Step 1.4 repoints them at the
-// derived views in shared/config.ts. Everything else is the canonical definition.
+// Config wire types come from the canonical shared/config.ts (PublicConfig, ScreenshotMode).
+// `FullConfig` (the flat config:get response) stays here as an IPC-layer type.
+import type { ScreenshotMode, PublicConfig } from './config'
 
 export type OverlayMode = 'passthrough' | 'interactive'
-export type ScreenshotMode = 'direct' | 'ocr'
+export type { ScreenshotMode, PublicConfig }
 
 export interface ScreenRegion {
   x: number
@@ -56,7 +57,8 @@ export interface AnswerError {
   message: string
 }
 
-// ── Placeholder config payloads (repointed to shared/config.ts in Step 1.4) ──────────────
+// The flat config:get response (settings form echoes it back). Kept structurally identical to
+// the legacy renderer LLMConfig so no consumer changes; PublicConfig lives in shared/config.ts.
 export interface FullConfig {
   apiKey: string
   baseUrl: string
@@ -69,10 +71,6 @@ export interface FullConfig {
   asrApiKey: string
   asrBaseUrl: string
   asrModel: string
-  overlayOpacity?: number
-  screenshotMode?: ScreenshotMode
-}
-export interface PublicConfig {
   overlayOpacity?: number
   screenshotMode?: ScreenshotMode
 }
