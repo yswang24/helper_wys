@@ -9,6 +9,7 @@ import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanup
 import { loadPersistedConfig, persistConfig } from './store'
 import { registerScreenshotIpc } from './screenshot'
 import { registerConfigIpc } from './config'
+import { createStreamSafe } from './stream-safe'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -542,38 +543,14 @@ registerConfigIpc({
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
-function waitForStreamEnd(callback: () => void): void {
-  if (!isCurrentlyStreaming()) { callback(); return }
-  let checks = 0
-  const tick = () => {
-    if (!isCurrentlyStreaming()) { callback(); return }
-    if (++checks > 80) {   // 80 * 50ms = 4s max
-      forceResetStreaming()
-      callback()
-      return
-    }
-    setTimeout(tick, 50)
-  }
-  tick()
-}
-
-// Begin a new stream, first draining any in-flight one. `run` is re-guarded at call time because
-// waitForStreamEnd can defer it up to ~4s, by which point the overlay may have been destroyed —
-// streaming into a dead window would throw.
-function startStreamSafely(run: (win: BrowserWindow) => void): void {
-  const start = () => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      ensureOverlayVisible()  // a hidden overlay would otherwise swallow the whole answer silently
-      run(overlayWindow)
-    }
-  }
-  if (isCurrentlyStreaming()) {
-    stopStreaming()
-    waitForStreamEnd(start)
-  } else {
-    start()
-  }
-}
+// Shared stream serialization (drain-then-start) lives in ./stream-safe.
+const { startStreamSafely } = createStreamSafe({
+  isCurrentlyStreaming,
+  stopStreaming,
+  forceResetStreaming,
+  getOverlayWindow: () => overlayWindow,
+  ensureOverlayVisible
+})
 
 ipcMain.on('llm:ask', (_e, question: string) => {
   if (!overlayWindow) return
