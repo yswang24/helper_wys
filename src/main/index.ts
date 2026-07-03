@@ -7,8 +7,8 @@ import { File as NodeFile } from 'node:buffer'
 import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection, setMainWindow } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
-import { splitConfigSet, hasAsrField, asrPatch, mergeConfigForPersist } from './config-merge'
 import { registerScreenshotIpc } from './screenshot'
+import { registerConfigIpc } from './config'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -527,61 +527,18 @@ ipcMain.handle('app:get-status', () => ({
 }))
 
 // ── IPC: config ───────────────────────────────────────────────────────────────
-// Connectivity tests use the values passed from the settings form (may be unsaved)
-ipcMain.handle('config:test-llm', (_e, cfg: { apiKey: string; baseUrl: string; model: string }) =>
-  testLLMConnection(cfg)
-)
-ipcMain.handle('config:test-vision', (_e, cfg: { apiKey: string; baseUrl: string; visionModel: string }) =>
-  testVisionConnection(cfg)
-)
-ipcMain.handle('config:test-asr', (_e, cfg: { apiKey: string; baseUrl: string; model: string }) =>
-  testASRConnection(cfg)
-)
-
-// Full config incl. plaintext API keys — for the SETTINGS form (main window) to echo back.
-ipcMain.handle('config:get', () => {
-  const asr = getASRConfig()
-  const persisted = loadPersistedConfig()
-  return {
-    ...getConfig(),
-    asrApiKey: asr.apiKey,
-    asrBaseUrl: asr.baseUrl,
-    asrModel: asr.model,
-    overlayOpacity: persisted.overlayOpacity ?? 0.94,
-    screenshotMode: persisted.screenshotMode ?? 'direct',
-  }
-})
-
-// Secret-free subset for non-settings windows (the overlay only needs appearance). Keeps the
-// plaintext API keys out of the overlay renderer's memory — least privilege.
-ipcMain.handle('config:get-public', () => {
-  const persisted = loadPersistedConfig()
-  return {
-    overlayOpacity: persisted.overlayOpacity ?? 0.94,
-    screenshotMode: persisted.screenshotMode ?? 'direct',
-  }
-})
-
-ipcMain.on('config:set', (_e, partial) => {
-  const p = partial as Record<string, unknown>
-  // Log only field names — never the values (would leak API keys)
-  console.log('[Config] received keys:', Object.keys(p).join(', '))
-  // Update in-memory configs for immediate use. screenshotMode is a main-process behavior flag,
-  // not an LLM param — pull it out of llmPartial so it never leaks into the LLM config; it's
-  // read straight from the persisted file in the screenshot handler.
-  const { llmPartial, overlayOpacity } = splitConfigSet(p)
-  if (Object.keys(llmPartial).length) setConfig(llmPartial as Record<string, string>)
-  if (hasAsrField(p)) setASRConfig(asrPatch(getASRConfig(), p))
-  if (overlayOpacity !== undefined) {
-    overlayWindow?.webContents.send('overlay:opacity', Number(overlayOpacity))
-  }
-  // Persist via read-modify-write: only overwrite fields actually provided, so a
-  // partial update (e.g. the opacity slider) can never blank out a saved API key.
-  // Value comparison replaces the old "never persist jobDescription" skip: JD/resume now
-  // survive restarts, and an update carrying identical content (the JD sync fires on every
-  // typing pause; blur without edits re-sends the same resume) costs no disk rewrite.
-  const { merged, changed } = mergeConfigForPersist(loadPersistedConfig() as Record<string, unknown>, p)
-  if (changed) persistConfig(merged as Parameters<typeof persistConfig>[0])
+// Handlers live in ./config; registered here (module-eval) with injected deps.
+registerConfigIpc({
+  testLLMConnection,
+  testVisionConnection,
+  testASRConnection,
+  getConfig,
+  setConfig,
+  getASRConfig,
+  setASRConfig,
+  loadPersistedConfig,
+  persistConfig,
+  sendOverlayOpacity: (opacity) => overlayWindow?.webContents.send('overlay:opacity', opacity)
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
