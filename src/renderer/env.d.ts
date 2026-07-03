@@ -41,6 +41,11 @@ interface TranscriptData {
 interface ElectronAPI {
   // Overlay
   setIgnoreMouse: (ignore: boolean) => void
+  requestOverlayMode: (interactive: boolean) => void
+  onOverlayMode: (cb: (mode: 'passthrough' | 'interactive') => void) => UnlistenFn
+  startOverlayDrag: (x: number, y: number) => void
+  moveOverlayDrag: (x: number, y: number) => void
+  endOverlayDrag: () => void
   // Status
   getStatus: () => Promise<AppStatus>
   platform: string

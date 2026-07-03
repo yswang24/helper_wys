@@ -24,10 +24,11 @@
 | 快捷键 | 作用 |
 |---|---|
 | ⌘⌥H | 显示 / 隐藏浮层 |
+| ⌘⌥E | 浮层 穿透 / 输入 模式切换（见「焦点」一节） |
 | ⌘⌥X | 录音开关（语音转写） |
 | ⌘⌥S | 截图解题（框选区域） |
 
-只保留这三个高频热键。其余操作走界面/托盘：主窗口显隐点 Dock / 托盘图标；清空走浮层或主窗口的「清空」按钮；退出走托盘菜单「退出」。
+只保留这几个高频热键。其余操作走界面/托盘：主窗口显隐点 Dock / 托盘图标；穿透↔输入也可走托盘或浮层头部徽标；清空走浮层或主窗口的「清空」按钮；退出走托盘菜单「退出」。
 
 某个快捷键被别的 app 占用而注册失败时，主窗口顶部会出现黄色提示。
 
@@ -78,16 +79,34 @@ macOS 没有系统音频 loopback（那是 Windows 专属），所以用虚拟�
 
 ## 焦点（防切屏检测）
 
-浏览器类判题平台（HackerRank/Coderpad/牛客）监听 `blur` / `visibilitychange` 来判切屏。让浮层成为**非激活窗口**（`showInactive` + `setFocusable(false)` + `setActivationPolicy('accessory')`）能在"读答案"时不抢焦点，但 `setFocusable` 在 macOS 有官方 caveat，必须真机验证。
+浏览器类判题平台（HackerRank/Coderpad/牛客）盯 `window.blur` / `document.visibilitychange` 来判「切屏」。macOS + Electron 28 上「浮层能打字」与「永不激活本 app」无法靠单窗口同时满足，故拆成**两种模式**，**只用 ⌘⌥E 或托盘切换**（头部徽标只是当前模式指示器、不可点）：
 
-跑验证：
+| 模式 | 行为 | 焦点 |
+|---|---|---|
+| **穿透 🔒（默认）** | 点击穿到下层，浮层只读展示答案 | `focusable:false` + `showInactive()` + `setIgnoreMouseEvents(true)`，不激活本 app、不抢焦点 |
+| **输入 ✏️** | 可点击、滚动、打字、拖动调位置 | `setFocusable(true)` + `setIgnoreMouseEvents(false)`；**切模式本身不 `focus()`、不激活** |
 
-```bash
-npx electron spike/focus-overlay.js
-# 浏览器打开 spike/tab-watch.html，操作浮层时看它有没有报 blur/hidden
+**已实测确认（macOS 14 / Electron 28.3.3）**：浮层是 `type:'panel'`（非激活面板），输入模式下**点进浮层打字，前台浏览器不会收到 `window.blur`**——即打字不激活本 app、不触发经典「失焦切屏」。因此**无需**升级 Electron 或写原生插件。
+
+实现要点（`src/main/index.ts` `applyOverlayMode` 等）：
+
+- **从不 `show()` / `focus()`，一律 `showInactive()`**：E28 的 `Show()` 会无条件 `activateIgnoringOtherApps:YES`。
+- **从不 `blur()`**：E28 的 `win.blur()` 内部是 `[orderOut:] + [orderBack:]`（把透明合成面摘下屏幕再贴回），会让浮层肉眼「闪一下」。前台焦点靠用户下次点浏览器时自然交还。
+- **切模式不改变窗口位置**：`applyOverlayMode` 切换前后对比 `getPosition` 并强制还原。
+- **拖动调位置**用手动拖（渲染层 `mousedown` → IPC → 主进程按事件 `screenX/Y` 位移 `setPosition`，含 3px 点击阈值），不用 `-webkit-app-region:drag`（在 透明+无边框+panel 下不可靠）。仅输入模式可拖。
+- 保留 `setActivationPolicy('regular')`（留 Dock 图标）；每次显示后重设 `setContentProtection(true)`（E28 hide→show 会丢）。Windows 侧靠 `focusable:false → WS_EX_NOACTIVATE`。
+
+### 验证方法
+
+浮层对截屏隐身（`setContentProtection`），不能靠录屏。用前台浏览器直接听事件：控制台粘贴 ↓，保持浏览器在前台，再去浮层 ⌘⌥E 进输入、点输入框打字，看有没有蹦字。
+
+```js
+addEventListener('blur', () => console.log('%c切屏! window.blur', 'color:red;font-weight:bold'))
+document.addEventListener('visibilitychange', () => console.log('visibility hidden=' + document.hidden))
 ```
 
-详见 [`spike/README.md`](spike/README.md)。验证通过后再把该方案接进主应用。
+- 打字时**不出现** `切屏! window.blur` = 非激活面板生效、`blur` 这条检测线干净（已确认）。
+- `visibilitychange hidden=` 是另一条独立信号：排查时**全程别切到别的窗口**，单独确认是浮层触发还是自己切窗口的噪音。
 
 ---
 

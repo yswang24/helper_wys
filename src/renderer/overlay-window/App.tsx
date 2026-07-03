@@ -38,6 +38,11 @@ export function App() {
   // Appearance
   const [bgOpacity, setBgOpacity] = useState(0.94)
 
+  // Overlay interaction mode (driven by main via applyOverlayMode / ⌘⌥E / tray):
+  // 'passthrough' = 点击穿透 + 不可聚焦(不激活本 app、不切屏,默认);
+  // 'interactive' = 可点击 + 可打字(进入时会激活本 app 一次——一次有意的切屏)。
+  const [overlayMode, setOverlayMode] = useState<'passthrough' | 'interactive'>('passthrough')
+
   // Manual input
   const [showInput, setShowInput] = useState(false)
   const [inputText, setInputText] = useState('')
@@ -76,6 +81,9 @@ export function App() {
     const un = window.electronAPI.onOverlayOpacity((opacity) => setBgOpacity(opacity))
     return un
   }, [])
+
+  // ── Interaction mode: reflect the main-process mode in the header badge ──────
+  useEffect(() => window.electronAPI.onOverlayMode(setOverlayMode), [])
 
   // ── Focus management: only allow focus on input elements ──
   useEffect(() => {
@@ -228,14 +236,15 @@ export function App() {
     if (stickToBottomRef.current) answerEndRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [lastAnswer])
 
-  // Mouse pass-through is now handled by main process cursor polling (index.ts)
+  // Mouse pass-through & activation are driven by the main process per mode (index.ts
+  // applyOverlayMode): 'passthrough' = whole-window click-through + non-focusable (no 切屏);
+  // 'interactive' = focusable + clickable. Toggle via the header badge / ⌘⌥E / tray.
 
   const allTranscript = finalLines.join(' ')
 
   return (
-    // Interactivity is driven by the main process toggling setIgnoreMouseEvents from the cursor
-    // position (index.ts heartbeat), so the whole window is either click-through or not — a CSS
-    // none/auto split here would only imply per-pixel precision the bounds poll doesn't have.
+    // Interactivity is a whole-window mode (see overlayMode): in 'passthrough' the window is
+    // click-through and non-activating; in 'interactive' it captures clicks and can take keyboard.
     <div className="h-screen w-screen overflow-hidden">
       <div
         ref={panelRef}
@@ -243,16 +252,36 @@ export function App() {
         style={{
           background: `rgba(10, 10, 16, ${bgOpacity})`,
           border: '1px solid rgba(70, 70, 110, 0.6)',
+          // 毛玻璃恢复:切换闪动的真凶是 blur()=[orderOut:](已删),不是这层滤镜。若日后某处再让本 app
+          // 真正失活并观察到重绘闪,再考虑去掉它。
           backdropFilter: 'blur(16px)'
         }}
       >
-        {/* Drag handle */}
+        {/* Drag handle — manual window drag via IPC (index.ts overlay:drag-*). Replaces
+            -webkit-app-region:drag, unreliable on transparent+frameless+panel windows after
+            setIgnoreMouseEvents toggling. Only fires in interactive mode (in passthrough the
+            window is click-through, so no mousedown lands here). */}
         <div
           className="flex items-center gap-2 px-3 py-2 border-b flex-shrink-0 cursor-move"
+          onMouseDown={(e) => {
+            if (e.button !== 0) return
+            // 点在按钮/输入框上不拖(那是交互);只从头部空白处发起窗口拖动
+            if ((e.target as HTMLElement).closest('button, input, textarea')) return
+            window.electronAPI.startOverlayDrag(e.screenX, e.screenY)
+            const onMove = (ev: MouseEvent) => window.electronAPI.moveOverlayDrag(ev.screenX, ev.screenY)
+            const onUp = () => {
+              window.removeEventListener('mousemove', onMove)
+              window.removeEventListener('mouseup', onUp)
+              window.electronAPI.endOverlayDrag()
+            }
+            window.addEventListener('mousemove', onMove)
+            window.addEventListener('mouseup', onUp)
+          }}
           style={{
             background: `rgba(20, 20, 35, ${Math.min(bgOpacity + 0.06, 0.98)})`,
             borderColor: 'rgba(70, 70, 110, 0.5)',
-            WebkitAppRegion: 'drag'
+            userSelect: 'none',
+            WebkitUserSelect: 'none'
           } as React.CSSProperties}
         >
           <StatusDot llm={history.length > 0 ? history[history.length - 1].status : 'idle'} listening={listening} />
@@ -265,6 +294,20 @@ export function App() {
             </span>
           )}
           <div className="ml-auto flex items-center gap-2">
+            {/* Mode badge — 纯指示当前模式,不可点。切换只走 ⌘⌥E / 托盘:点击切换会激活本 app、
+                毛玻璃背景重绘导致"跳一下"。pointerEvents:none 保证它永远不参与鼠标命中。 */}
+            <div
+              title="当前模式指示(穿透 / 输入)。切换用 ⌘⌥E 或托盘菜单。"
+              className="text-xs px-2 py-0.5 rounded select-none"
+              style={{
+                background: overlayMode === 'interactive' ? 'rgba(16,185,129,0.2)' : 'rgba(30,30,60,0.5)',
+                color: overlayMode === 'interactive' ? '#34d399' : '#64748b',
+                border: `1px solid ${overlayMode === 'interactive' ? 'rgba(52,211,153,0.4)' : 'rgba(50,50,80,0.4)'}`,
+                pointerEvents: 'none'
+              } as React.CSSProperties}
+            >
+              {overlayMode === 'interactive' ? '✏️ 输入' : '🔒 穿透'}
+            </div>
             <button
               onClick={() => { setShowInput((v) => !v); setTimeout(() => inputRef.current?.focus(), 50) }}
               className="text-xs px-2 py-0.5 rounded transition-colors"

@@ -3,9 +3,22 @@ import { contextBridge, ipcRenderer } from 'electron'
 type UnlistenFn = () => void
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // ── Overlay mouse pass-through ──────────────────────────────────────────────
+  // ── Overlay mouse pass-through / mode ───────────────────────────────────────
   setIgnoreMouse: (ignore: boolean) =>
     ipcRenderer.send('overlay:set-ignore-mouse', ignore),
+  // 请求把悬浮窗切到 'interactive'(可打字,进入会激活本 app 一次)或 'passthrough'(穿透·不抢焦点)
+  requestOverlayMode: (interactive: boolean) =>
+    ipcRenderer.send('overlay:request-mode', interactive),
+  onOverlayMode: (cb: (mode: 'passthrough' | 'interactive') => void): UnlistenFn => {
+    const handler = (_e: Electron.IpcRendererEvent, mode: 'passthrough' | 'interactive') => cb(mode)
+    ipcRenderer.on('overlay:mode', handler)
+    return () => ipcRenderer.removeListener('overlay:mode', handler)
+  },
+  // 手动拖动悬浮窗(头部按下 start、移动 move、松开 end),坐标传事件的 screenX/screenY。
+  // 仅输入模式下头部能收到鼠标,故自然只在非穿透生效。
+  startOverlayDrag: (x: number, y: number) => ipcRenderer.send('overlay:drag-start', { x, y }),
+  moveOverlayDrag: (x: number, y: number) => ipcRenderer.send('overlay:drag-move', { x, y }),
+  endOverlayDrag: () => ipcRenderer.send('overlay:drag-end'),
 
   // ── App status ──────────────────────────────────────────────────────────────
   getStatus: () => ipcRenderer.invoke('app:get-status'),
