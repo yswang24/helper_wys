@@ -14,27 +14,26 @@ import { registerAppIpc } from './ipc/app'
 import { registerClipboardIpc } from './ipc/clipboard'
 import { registerLlmIpc } from './ipc/llm'
 import { registerAsrIpc } from './ipc/asr'
-import { registerOverlayIpc, type OverlayDragStart } from './ipc/overlay'
+import { registerOverlayIpc } from './ipc/overlay'
+import { OverlayController } from './overlay-controller'
 
 let mainWindow: BrowserWindow | null = null
-let overlayWindow: BrowserWindow | null = null
 let selectorWindow: BrowserWindow | null = null
 let selectorDisplayId: number | null = null  // which display the active selector covers (multi-monitor)
 let tray: Tray | null = null
-let overlayUserVisible = true  // tracks whether user wants overlay visible
 let isQuitting = false  // distinguishes "hide main window" from a real app quit
 let isCapturing = false // true while the screenshot selector is up — suppresses activate→restore
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null  // overlay mouse/restore heartbeat
-let overlayRebuildCount = 0  // consecutive crash-rebuilds; reset on a successful load, capped to stop a loop
-// 悬浮窗交互模式:false=穿透/展示(默认,不激活本 app、点击穿到下层、不触发前台切屏);
-// true=交互/输入(可拿键盘,进入时会 focus() 激活本 app 一次——唯一有意的切屏)。
-let overlayInteractive = false
-// 手动拖动悬浮窗(仅输入模式,穿透模式收不到鼠标故拖不动)。用手动拖代替 -webkit-app-region:drag——
-// 后者在 透明+无边框+panel+运行时 setIgnoreMouseEvents 切换 的组合下不可靠。非 null 即正在拖动:
-// 记录按下时的窗口位与鼠标屏幕坐标(取自渲染层事件,避开 IPC 采样延迟),按位移 setPosition;
-// moved 标记是否已越过点击阈值——未越过就当"点击"、不移动窗口(否则每次点击都会跳一下)。
-let overlayDragStart: OverlayDragStart | null = null
 const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
+
+// The stealth overlay + its two-mode invariants live in OverlayController. onVisibilityChange
+// refreshes the tray; isQuitting is read live so a crash-rebuild during quit is suppressed.
+const overlayController = new OverlayController({
+  loadPersistedConfig,
+  persistConfig,
+  hardenWebContents,
+  isQuitting: () => isQuitting,
+  onVisibilityChange: () => updateTrayMenu()
+})
 
 function registerShortcut(accelerator: string, handler: () => void): void {
   if (!globalShortcut.register(accelerator, handler)) {
@@ -127,19 +126,14 @@ function updateTrayMenu(): void {
   if (!tray) return
   const menu = Menu.buildFromTemplate([
     {
-      label: overlayWindow?.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
-      click: () => {
-        if (overlayWindow?.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
-        else { overlayUserVisible = true; overlayWindow?.showInactive() }  // 非激活显示,不切屏
-        updateTrayMenu()
-      }
+      label: overlayController.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
+      click: () => overlayController.toggleVisibility()
     },
     {
-      label: overlayInteractive ? '切到穿透模式（不抢焦点）' : '切到输入模式（可打字·会切屏）',
-      click: () => {
-        if (overlayWindow && !overlayWindow.isVisible()) { overlayUserVisible = true; overlayWindow.showInactive() }
-        applyOverlayMode(!overlayInteractive)
-      }
+      label: overlayController.isInteractive()
+        ? '切到穿透模式（不抢焦点）'
+        : '切到输入模式（可打字·会切屏）',
+      click: () => overlayController.ensureShownAndToggleMode()
     },
     { type: 'separator' },
     {
@@ -151,144 +145,6 @@ function updateTrayMenu(): void {
     }
   ])
   tray.setContextMenu(menu)
-}
-
-// Make sure answers are actually seen: if the overlay is hidden (user pressed ⌘⌥H, or the OS hid
-// it) when a stream/OCR starts, the answer would stream into nothing — the heartbeat only auto-
-// restores when overlayUserVisible is already true. Pull it back up before any answer begins.
-function ensureOverlayVisible(): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return
-  if (!overlayWindow.isVisible()) {
-    overlayUserVisible = true
-    overlayWindow.showInactive()  // 不用 show():show() 会激活本 app → 触发前台窗口切屏
-    overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-    overlayWindow.setContentProtection(true)  // hide→show 后内容保护可能丢失(E28),重设
-    updateTrayMenu()
-  }
-}
-
-// 切换悬浮窗的 穿透/输入 两种模式。关键:切模式本身【不激活/不失活 app】——只改 setFocusable +
-// setIgnoreMouseEvents(都是廉价同步、不重绘)。之前每次切都 focus()/blur() 会让 app 激活/失活,
-// 毛玻璃背景随之重新合成 → 肉眼"跳一下";连按还被 macOS 的激活节流拖慢。现在:
-//  · 输入:setFocusable(true)+setIgnoreMouseEvents(false)。不在这里 focus();真正的键盘焦点(和那
-//    一次有意的切屏)推迟到用户【点进悬浮窗】时由 macOS 的 click-to-focus 触发(配合构造里的
-//    acceptFirstMouse:true,首击即可命中控件/输入框)。于是 ⌘⌥E 连切完全不激活、不跳、可秒切。
-//  · 穿透:setIgnoreMouseEvents(true)+setFocusable(false)。【不调用 blur()】——E28 的 win.blur() 内部是
-//    [orderOut:]+[orderBack:],把透明合成面摘下屏幕再贴回本层最底 → 肉眼"闪一下"(已从
-//    native_window_mac.mm 源码确证;坐标探针测不到是因为 orderOut 只改 z 序、不改坐标)。前台焦点
-//    交还浏览器,推迟到用户下次点浏览器时由 macOS click-to-focus 自然完成(那一刻的重合成也被点击掩盖)。
-function applyOverlayMode(interactive: boolean): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return
-  overlayDragStart = null  // 取消进行中的拖动(防"拖到一半切模式"卡住窗口跟随光标)
-  overlayInteractive = interactive
-  const [px, py] = overlayWindow.getPosition()  // 切换前的屏幕位置
-  if (interactive) {
-    overlayWindow.setFocusable(true)
-    overlayWindow.setIgnoreMouseEvents(false)
-  } else {
-    overlayWindow.setIgnoreMouseEvents(true)
-    overlayWindow.setFocusable(false)
-    // 不 blur():win.blur()=[orderOut:]+[orderBack:] 会摘面重贴 → 闪。焦点靠用户下次点浏览器自然交还。
-  }
-  // 硬保证:切模式绝不改变窗口位置(要求:输入模式拖到左上角,切回穿透仍在左上角)。
-  const [nx, ny] = overlayWindow.getPosition()
-  if (nx !== px || ny !== py) overlayWindow.setPosition(px, py)
-  overlayWindow.webContents.send('overlay:mode', interactive ? 'interactive' : 'passthrough')
-  updateTrayMenu()
-}
-
-function createOverlayWindow(): void {
-  overlayWindow = new BrowserWindow({
-    width: 500,
-    height: 680,
-    x: 20,
-    y: 80,
-    transparent: true,
-    frame: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: true,
-    hasShadow: false,
-    type: 'panel',
-    // 默认进入"穿透/展示"模式:focusable:false → 点击悬浮窗不激活本 app(不切屏)。
-    // 需要打字时用 ⌘⌥E / 托盘切到"输入"模式(applyOverlayMode 里 setFocusable(true))。
-    focusable: false,
-    // 输入模式下窗口尚未 key 时,首次点击靠 click-to-focus 激活;acceptFirstMouse 让这一击同时
-    // 命中控件/输入框,而不是被当作纯激活点吞掉。
-    acceptFirstMouse: true,
-    show: false,  // 不用默认 show:true(会激活);加载完成后用 showInactive() 显示
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  })
-
-  // Invisible to all screen capture (DXGI / getDisplayMedia / OBS)
-  overlayWindow.setContentProtection(true)
-  hardenWebContents(overlayWindow)
-  // screen-saver level keeps overlay above conferencing app overlays on Windows
-  overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-  // 默认穿透:整窗点击穿到下层。无需 forward(不再做渲染层逐元素命中,徽标已是不可点指示器)。
-  overlayWindow.setIgnoreMouseEvents(true)
-
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  if (devUrl) {
-    overlayWindow.loadURL(`${devUrl}/overlay-window/index.html`)
-  } else {
-    overlayWindow.loadFile(join(__dirname, '../renderer/overlay-window/index.html'))
-  }
-
-  // Restore the saved position (clamped to a still-connected display) + persist future moves HERE
-  // rather than only at startup, so an overlay rebuilt after a crash lands where the user left it.
-  // Opacity needs no re-send: the overlay renderer pulls it via getPublicConfig on mount.
-  const persisted = loadPersistedConfig()
-  if (persisted.overlayX !== undefined && persisted.overlayY !== undefined) {
-    const [w, h] = overlayWindow.getSize()
-    const area = screen.getDisplayMatching({ x: persisted.overlayX, y: persisted.overlayY, width: w, height: h }).workArea
-    const x = Math.round(Math.min(Math.max(persisted.overlayX, area.x), area.x + area.width - w))
-    const y = Math.round(Math.min(Math.max(persisted.overlayY, area.y), area.y + area.height - h))
-    overlayWindow.setPosition(x, y)
-  }
-
-  overlayWindow.on('moved', () => {
-    // 手动拖动过程中每帧 setPosition 都会触发 moved;拖动时不落盘,改由 drag-end 落一次,避免磁盘抖动。
-    if (!overlayWindow || overlayDragStart) return
-    const [x, y] = overlayWindow.getPosition()
-    const { overlayX: _x, overlayY: _y, ...rest } = loadPersistedConfig()
-    persistConfig({ ...rest, overlayX: x, overlayY: y })
-  })
-
-  // A clean load means the last (re)build succeeded — reset the crash-loop guard.
-  overlayWindow.webContents.on('did-finish-load', () => {
-    overlayRebuildCount = 0
-    // 构造用了 show:false → 加载完成后以非激活方式显示(不切屏)。重载/HMR 或崩溃重建后
-    // 一并重新落实:内容保护(E28 hide→show 会丢失)、以及穿透态(reload 后 forward 可能失效)。
-    if (overlayUserVisible && overlayWindow && !overlayWindow.isVisible()) overlayWindow.showInactive()
-    overlayWindow?.setContentProtection(true)
-    if (!overlayInteractive) overlayWindow?.setIgnoreMouseEvents(true)
-  })
-
-  // A renderer crash (GPU/OOM) can leave the BrowserWindow alive but dead — 'closed' never fires,
-  // so every entry point (⌘⌥H, ask, screenshot) would silently no-op forever. Force-destroy it so
-  // the 'closed' handler below rebuilds a working overlay.
-  overlayWindow.webContents.on('render-process-gone', () => {
-    if (isQuitting || !overlayWindow) return
-    console.warn('[Overlay] render process gone — destroying to trigger rebuild')
-    overlayWindow.destroy()
-  })
-
-  overlayWindow.on('closed', () => {
-    overlayWindow = null
-    // Without this, a crashed/closed overlay is gone until an app restart: the heartbeat, ⌘⌥H, and
-    // every stream/screenshot entry point short-circuit on `if (!overlayWindow) return`, so answers
-    // have nowhere to go — fatal mid-interview. Rebuild unless we're really quitting; cap retries
-    // so a persistently-broken renderer can't spin forever.
-    if (!isQuitting && overlayRebuildCount < 5) {
-      overlayRebuildCount++
-      setTimeout(() => { if (!isQuitting && !overlayWindow) createOverlayWindow() }, 500)
-    }
-  })
 }
 
 function createSelectorWindow(): void {
@@ -391,25 +247,11 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media')
 
   createMainWindow()
-  createOverlayWindow()
+  overlayController.create()
 
-  // ── Mouse pass-through + heartbeat ─────────────────────────────────────────
-  // Dynamically toggle setIgnoreMouseEvents so the overlay only intercepts
-  // clicks when the cursor is actually inside the window bounds.
-  // 心跳只负责"被 OS/会议软件强行隐藏后自动恢复可见"。点击穿透不再靠这里轮询整窗矩形
-  // (旧做法会造成透明圆角处死点击、且无法区分模式),改由 applyOverlayMode 按模式整窗设定。
-  heartbeatTimer = setInterval(() => {
-    if (!overlayWindow || overlayWindow.isDestroyed()) return
-
-    // Restore overlay if it was hidden by OS/conferencing app
-    if (overlayUserVisible && !overlayWindow.isVisible()) {
-      overlayWindow.showInactive()  // 恢复也用非激活方式,避免切屏
-      overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-      overlayWindow.setContentProtection(true)  // 恢复后重设内容保护(E28 hide→show 会丢)
-      if (!overlayInteractive) overlayWindow.setIgnoreMouseEvents(true)  // 重新落实穿透态
-      updateTrayMenu()  // visibility changed → refresh the tray label
-    }
-  }, 100)  // 10Hz: restore latency stays imperceptible while halving idle wakeups
+  // Overlay restore heartbeat (10Hz): re-shows + re-asserts content-protection if the OS /
+  // conferencing app force-hides the overlay. Owned by OverlayController.
+  overlayController.startHeartbeat()
 
   // ── System tray ──────────────────────────────────────────────────────────────
   const iconPath = join(__dirname, '../../resources/icon.png')
@@ -426,19 +268,10 @@ app.whenReady().then(() => {
   // after a crash re-applies them too). Opacity is pulled by the overlay renderer via
   // getPublicConfig on mount, so nothing extra is needed here.
 
-  registerShortcut('CommandOrControl+Alt+H', () => {
-    if (!overlayWindow) return
-    if (overlayWindow.isVisible()) { overlayUserVisible = false; overlayWindow.hide() }
-    else { overlayUserVisible = true; overlayWindow.showInactive() }  // 非激活显示,不切屏
-    updateTrayMenu()  // keep the tray label in sync with overlay visibility
-  })
+  registerShortcut('CommandOrControl+Alt+H', () => overlayController.toggleVisibility())
 
   // 切换悬浮窗 穿透/输入 模式。穿透模式下悬浮窗收不到键盘,故切换必须走全局快捷键(或托盘)。
-  registerShortcut('CommandOrControl+Alt+E', () => {
-    if (!overlayWindow) return
-    if (!overlayWindow.isVisible()) { overlayUserVisible = true; overlayWindow.showInactive() }
-    applyOverlayMode(!overlayInteractive)
-  })
+  registerShortcut('CommandOrControl+Alt+E', () => overlayController.ensureShownAndToggleMode())
 
   // Toggle ASR: ⌘⌥X starts/stops recording. The renderer (VoiceTab) is the single
   // source of truth for "am I recording" — we just nudge it to flip. A main-side
@@ -476,21 +309,18 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
+  overlayController.stopHeartbeat()
   globalShortcut.unregisterAll()
 })
 
 // ── IPC: overlay pass-through/mode + manual drag ─────────────────────────────
-// Handlers live in ./ipc/overlay; drag state (overlayDragStart) stays here because
-// applyOverlayMode clears it. Injected via getters so behavior is unchanged.
+// Handlers live in ./ipc/overlay; drag state is owned by OverlayController (applyMode clears it).
 registerOverlayIpc({
-  getOverlayWindow: () => overlayWindow,
-  isInteractive: () => overlayInteractive,
-  applyOverlayMode,
-  getDragStart: () => overlayDragStart,
-  setDragStart: (d) => {
-    overlayDragStart = d
-  },
+  getOverlayWindow: () => overlayController.getWindow(),
+  isInteractive: () => overlayController.isInteractive(),
+  applyOverlayMode: (interactive) => overlayController.applyMode(interactive),
+  getDragStart: () => overlayController.getDragStart(),
+  setDragStart: (d) => overlayController.setDragStart(d),
   persistOverlayPos: (x, y) => {
     const { overlayX: _x, overlayY: _y, ...rest } = loadPersistedConfig()
     persistConfig({ ...rest, overlayX: x, overlayY: y })
@@ -498,7 +328,7 @@ registerOverlayIpc({
 })
 
 // ── IPC: app status ───────────────────────────────────────────────────────────
-registerAppIpc({ getOverlayWindow: () => overlayWindow, failedShortcuts })
+registerAppIpc({ getOverlayWindow: () => overlayController.getWindow(), failedShortcuts })
 
 // ── IPC: config ───────────────────────────────────────────────────────────────
 // Handlers live in ./config; registered here (module-eval) with injected deps.
@@ -512,7 +342,7 @@ registerConfigIpc({
   setASRConfig,
   loadPersistedConfig,
   persistConfig,
-  sendOverlayOpacity: (opacity) => overlayWindow?.webContents.send('overlay:opacity', opacity)
+  sendOverlayOpacity: (opacity) => overlayController.getWindow()?.webContents.send('overlay:opacity', opacity)
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
@@ -521,12 +351,12 @@ const { startStreamSafely } = createStreamSafe({
   isCurrentlyStreaming,
   stopStreaming,
   forceResetStreaming,
-  getOverlayWindow: () => overlayWindow,
-  ensureOverlayVisible
+  getOverlayWindow: () => overlayController.getWindow(),
+  ensureOverlayVisible: () => overlayController.ensureVisible(),
 })
 
 registerLlmIpc({
-  getOverlayWindow: () => overlayWindow,
+  getOverlayWindow: () => overlayController.getWindow(),
   startStreamSafely,
   streamAnswer,
   stopStreaming,
@@ -534,7 +364,7 @@ registerLlmIpc({
 })
 
 registerAsrIpc({
-  getOverlayWindow: () => overlayWindow,
+  getOverlayWindow: () => overlayController.getWindow(),
   startStreamSafely,
   streamAnswer,
   transcribeAudio
@@ -547,10 +377,10 @@ registerClipboardIpc()
 // Capture math + screencapture/desktopCapturer live in ./screenshot; the handler is registered
 // here (module-eval, before windows exist) with getter deps so it always sees the live windows.
 registerScreenshotIpc({
-  getOverlayWindow: () => overlayWindow,
+  getOverlayWindow: () => overlayController.getWindow(),
   getSelectorWindow: () => selectorWindow,
   getSelectorDisplayId: () => selectorDisplayId,
-  ensureOverlayVisible,
+  ensureOverlayVisible: () => overlayController.ensureVisible(),
   startStreamSafely,
   streamImageAnswer,
   extractImageText,
