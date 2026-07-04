@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
+import { useLlmSubmit } from '../hooks/useLlmSubmit'
 
 export function AskTab() {
   const [question, setQuestion] = useState('')
   const [jd, setJd] = useState('')
-  const [isSending, setIsSending] = useState(false)
+  const { isSending, submit: submitQuestion } = useLlmSubmit()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const sendTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   // Backfill the persisted JD once on mount. jdLoadedRef gates the sync effect below: without it,
   // the initial '' state would be pushed to the main process (and disk) before the load resolves,
@@ -29,39 +29,9 @@ export function AskTab() {
     return () => clearTimeout(t)
   }, [jd])
 
-  // Track the real stream lifecycle (main mirrors llm:start/done/error to this window) so "发送中…"
-  // reflects actual generation, not a fixed 1.5s guess. But these events fire for EVERY stream
-  // (voice/screenshot/overlay too), so correlate by id: only the stream WE submitted drives the
-  // button. pendingSubmitRef adopts the first start after a local submit; finishing requires a
-  // matching id (or, for pre-start errors carrying id:null, that we're still pending).
-  const pendingSubmitRef = useRef(false)
-  const myStreamIdRef = useRef<number | null>(null)
-  useEffect(() => {
-    const clearSafety = () => { if (sendTimerRef.current) clearTimeout(sendTimerRef.current) }
-    const reset = () => { clearSafety(); pendingSubmitRef.current = false; myStreamIdRef.current = null; setIsSending(false) }
-    const unStart = window.electronAPI.onAnswerStart(({ id }) => {
-      if (pendingSubmitRef.current) { myStreamIdRef.current = id; pendingSubmitRef.current = false }
-    })
-    const unDone = window.electronAPI.onAnswerDone(({ id }) => {
-      if (!pendingSubmitRef.current && id === myStreamIdRef.current) reset()
-    })
-    const unError = window.electronAPI.onAnswerError(({ id }) => {
-      // id:null = a pre-start failure (missing key / busy). If we're mid-submit, it's ours → reset.
-      if (pendingSubmitRef.current || (id !== null && id === myStreamIdRef.current)) reset()
-    })
-    return () => { unStart(); unDone(); unError(); clearSafety() }
-  }, [])
-
+  // Stream-lifecycle correlation for the "发送中…" button lives in useLlmSubmit.
   const submit = () => {
-    const q = question.trim()
-    if (!q || isSending) return
-    setIsSending(true)
-    pendingSubmitRef.current = true  // adopt the next stream start as ours
-    window.electronAPI.askQuestion(q)
-    setQuestion('')
-    // Safety net: if our start/done/error is ever missed, don't strand the button disabled.
-    if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
-    sendTimerRef.current = setTimeout(() => { pendingSubmitRef.current = false; myStreamIdRef.current = null; setIsSending(false) }, 30000)
+    if (submitQuestion(question)) setQuestion('')
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
