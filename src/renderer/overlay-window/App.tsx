@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { parseSegments, renderMarkdownBlock } from '../../shared/markdown'
 import { useStreamingAnswer, type HistoryItem, type LLMStatus } from './hooks/useStreamingAnswer'
+import { useAsrDisplay } from './hooks/useAsrDisplay'
+import { useOverlayOpacity } from './hooks/useOverlayOpacity'
+import { useOverlayMode } from './hooks/useOverlayMode'
 
 export function App() {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -22,17 +25,10 @@ export function App() {
   // LLM history + streaming state machine (chunk buffering, RAF flush, id reconciliation).
   const { history } = useStreamingAnswer(stickToBottomRef)
 
-  // ASR state — overlay only displays, main window does the actual capture
-  const [listening, setListening] = useState(false)
-  const [finalLines, setFinalLines] = useState<string[]>([])
-
-  // Appearance
-  const [bgOpacity, setBgOpacity] = useState(0.94)
-
-  // Overlay interaction mode (driven by main via applyOverlayMode / ⌘⌥E / tray):
-  // 'passthrough' = 点击穿透 + 不可聚焦(不激活本 app、不切屏,默认);
-  // 'interactive' = 可点击 + 可打字(进入时会激活本 app 一次——一次有意的切屏)。
-  const [overlayMode, setOverlayMode] = useState<'passthrough' | 'interactive'>('passthrough')
+  // ASR display / appearance / mode — overlay only displays; main does the capture & drives mode.
+  const { listening, finalLines, clearFinalLines } = useAsrDisplay()
+  const bgOpacity = useOverlayOpacity()
+  const overlayMode = useOverlayMode()
 
   // Manual input
   const [showInput, setShowInput] = useState(false)
@@ -61,20 +57,6 @@ export function App() {
     setShowExtracted(false)
     setExtractedText('')
   }, [extractedText])
-
-  // ── Appearance: opacity ─────────────────────────────────────────────────────
-  useEffect(() => {
-    // getPublicConfig (not getConfig): the overlay only needs appearance, so plaintext API keys
-    // never enter this renderer's memory.
-    window.electronAPI.getPublicConfig().then((cfg) => {
-      if (cfg.overlayOpacity !== undefined) setBgOpacity(cfg.overlayOpacity)
-    })
-    const un = window.electronAPI.onOverlayOpacity((opacity) => setBgOpacity(opacity))
-    return un
-  }, [])
-
-  // ── Interaction mode: reflect the main-process mode in the header badge ──────
-  useEffect(() => window.electronAPI.onOverlayMode(setOverlayMode), [])
 
   // ── Focus management: only allow focus on input elements ──
   useEffect(() => {
@@ -114,26 +96,6 @@ export function App() {
     }
   }, [])
 
-  // ── Receive transcripts from main window (via main process) ─────────────────
-  useEffect(() => {
-    const un = window.electronAPI.onTranscript(({ text, isFinal }) => {
-      if (isFinal && text.trim().length > 1) {
-        setFinalLines((prev) => [...prev, text].slice(-6))
-      }
-    })
-    return un
-  }, [])
-
-  // ── Listening indicator controlled by main window ───────────────────────────
-  useEffect(() => {
-    const unStart = window.electronAPI.onAsrStart(() => setListening(true))
-    const unStop = window.electronAPI.onAsrStop(() => setListening(false))
-    return () => { unStart(); unStop() }
-  }, [])
-
-  // ── LLM events ──────────────────────────────────────────────────────────────
-  // Every event carries the main-process stream id, so chunks/done/error attach to the RIGHT
-  // bubble even when streams overlap — instead of blindly mutating the last item.
   // ── Image text extraction ───────────────────────────────────────────────────
   useEffect(() => {
     const unStatus = window.electronAPI.onImageStatus((status) => {
@@ -286,7 +248,7 @@ export function App() {
               {allTranscript && (
                 <div className="flex gap-1.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
                   <button
-                    onClick={() => setFinalLines([])}
+                    onClick={() => clearFinalLines()}
                     className="text-xs px-1.5 py-0.5 rounded"
                     style={{ background: 'rgba(30,30,60,0.6)', color: '#94a3b8', border: '1px solid rgba(50,50,80,0.4)', cursor: 'pointer' }}
                   >
