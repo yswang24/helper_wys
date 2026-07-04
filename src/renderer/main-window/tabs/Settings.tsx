@@ -1,23 +1,24 @@
-import { useState, useEffect } from 'react'
 import { Field } from '../components/Field'
 import { TestRow } from '../components/TestRow'
 import { useServiceTest } from '../hooks/useServiceTest'
+import { useConfig } from '../hooks/useConfig'
 
 export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
-  const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
-  const [model, setModel] = useState('deepseek-chat')
-  const [visionModel, setVisionModel] = useState('deepseek-chat')
-  const [asrApiKey, setAsrApiKey] = useState('')
-  const [asrBaseUrl, setAsrBaseUrl] = useState('https://api.openai.com/v1')
-  const [asrModel, setAsrModel] = useState('whisper-1')
-  const [overlayOpacity, setOverlayOpacity] = useState(0.94)
-  const [screenshotMode, setScreenshotMode] = useState<'direct' | 'ocr'>('direct')
-  const [screenshotPrompt, setScreenshotPrompt] = useState('')
-  const [resume, setResume] = useState('')
-  const [answerLang, setAnswerLang] = useState<'zh' | 'en' | 'auto'>('zh')
-  const [saved, setSaved] = useState(false)
-  const [saveErr, setSaveErr] = useState('')
+  const {
+    apiKey, setApiKey,
+    baseUrl, setBaseUrl,
+    model, setModel,
+    visionModel, setVisionModel,
+    asrApiKey, setAsrApiKey,
+    asrBaseUrl, setAsrBaseUrl,
+    asrModel, setAsrModel,
+    overlayOpacity, setOverlayOpacity,
+    screenshotMode, setScreenshotMode,
+    screenshotPrompt, setScreenshotPrompt,
+    resume, setResume,
+    answerLang, setAnswerLang,
+    saved, saveErr, save
+  } = useConfig(onSaved)
   const { llmTest, visionTest, asrTest, testLlm, testVision, testAsr } = useServiceTest({
     apiKey,
     baseUrl,
@@ -27,36 +28,6 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
     asrBaseUrl,
     asrModel
   })
-
-  useEffect(() => {
-    window.electronAPI.getConfig().then((cfg) => {
-      if (cfg.apiKey) setApiKey(cfg.apiKey)
-      if (cfg.baseUrl) setBaseUrl(cfg.baseUrl)
-      if (cfg.model) setModel(cfg.model)
-      if (cfg.visionModel) setVisionModel(cfg.visionModel)
-      if (cfg.asrApiKey) setAsrApiKey(cfg.asrApiKey)
-      if (cfg.asrBaseUrl) setAsrBaseUrl(cfg.asrBaseUrl)
-      if (cfg.asrModel) setAsrModel(cfg.asrModel)
-      if (cfg.overlayOpacity !== undefined) setOverlayOpacity(cfg.overlayOpacity)
-      if (cfg.screenshotMode) setScreenshotMode(cfg.screenshotMode)
-      if (cfg.screenshotPrompt !== undefined) setScreenshotPrompt(cfg.screenshotPrompt)
-      if (cfg.resume !== undefined) setResume(cfg.resume)
-      if (cfg.answerLang === 'zh' || cfg.answerLang === 'en' || cfg.answerLang === 'auto') setAnswerLang(cfg.answerLang)
-    })
-  }, [])
-
-  const save = () => {
-    // Light validation so an obviously-broken config doesn't get a false '✓ 已保存'. Non-empty key
-    // + well-formed URLs only — never gate on a live test (that would break editing offline).
-    if (!apiKey.trim()) { setSaveErr('请填写 API Key'); return }
-    try { new URL(baseUrl) } catch { setSaveErr('Base URL 需形如 https://api.example.com'); return }
-    if (asrApiKey.trim()) { try { new URL(asrBaseUrl) } catch { setSaveErr('ASR Base URL 需形如 https://api.example.com'); return } }
-    setSaveErr('')
-    window.electronAPI.setConfig({ apiKey, baseUrl, model, visionModel, asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode, screenshotPrompt, resume, answerLang })
-    setSaved(true)
-    onSaved?.()
-    setTimeout(() => setSaved(false), 2000)
-  }
 
   return (
     <div className="flex flex-col gap-4 p-4 overflow-y-auto h-full">
