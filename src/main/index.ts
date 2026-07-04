@@ -14,6 +14,7 @@ import { registerAppIpc } from './ipc/app'
 import { registerClipboardIpc } from './ipc/clipboard'
 import { registerLlmIpc } from './ipc/llm'
 import { registerAsrIpc } from './ipc/asr'
+import { registerOverlayIpc, type OverlayDragStart } from './ipc/overlay'
 
 let mainWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -32,7 +33,7 @@ let overlayInteractive = false
 // 后者在 透明+无边框+panel+运行时 setIgnoreMouseEvents 切换 的组合下不可靠。非 null 即正在拖动:
 // 记录按下时的窗口位与鼠标屏幕坐标(取自渲染层事件,避开 IPC 采样延迟),按位移 setPosition;
 // moved 标记是否已越过点击阈值——未越过就当"点击"、不移动窗口(否则每次点击都会跳一下)。
-let overlayDragStart: { winX: number; winY: number; mouseX: number; mouseY: number; moved: boolean } | null = null
+let overlayDragStart: OverlayDragStart | null = null
 const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
 
 function registerShortcut(accelerator: string, handler: () => void): void {
@@ -479,44 +480,18 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
 })
 
-// ── IPC: overlay mouse pass-through + mode ───────────────────────────────────
-// 仅穿透模式听渲染层的逐元素命中——用来把"穿透"徽标做成穿透态里唯一仍可点的小热点(好切回输入)。
-// 输入模式整窗捕获(applyOverlayMode 已 setIgnoreMouseEvents(false)),这里直接忽略,防切换瞬间
-// 渲染层残留的一条 mousemove 命中又把窗口设回穿透。
-ipcMain.on('overlay:set-ignore-mouse', (_e, ignore: boolean) => {
-  if (overlayInteractive) return
-  overlayWindow?.setIgnoreMouseEvents(ignore, { forward: true })
-})
-
-// 渲染进程(输入模式下头部的模式徽标)请求切换 穿透/输入 模式
-ipcMain.on('overlay:request-mode', (_e, interactive: boolean) => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) applyOverlayMode(!!interactive)
-})
-
-// ── IPC: overlay 手动拖动(仅输入模式) ──────────────────────────────────────
-// 渲染进程在头部按下时 drag-start、移动时 drag-move(都带该事件的 e.screenX/Y)、松开时 drag-end。
-// 位移按“当前鼠标屏幕坐标 − 按下时坐标”算,坐标来自渲染层事件本身(而非事后 getCursorScreenPoint,
-// 避免采样延迟造成的跳动)。macOS 上 CSS px 与窗口 DIP 一一对应,且只用差值,原点/多屏都自动抵消。
-// 3px 阈值:按下→抬起间的微小抖动不足以移动窗口,于是“点击”不再让窗口跳一下。
-ipcMain.on('overlay:drag-start', (_e, m: { x: number; y: number }) => {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return
-  const [winX, winY] = overlayWindow.getPosition()
-  overlayDragStart = { winX, winY, mouseX: m.x, mouseY: m.y, moved: false }
-})
-ipcMain.on('overlay:drag-move', (_e, m: { x: number; y: number }) => {
-  if (!overlayWindow || overlayWindow.isDestroyed() || !overlayDragStart) return
-  const dx = m.x - overlayDragStart.mouseX
-  const dy = m.y - overlayDragStart.mouseY
-  if (!overlayDragStart.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return  // 视为点击,不移动
-  overlayDragStart.moved = true
-  overlayWindow.setPosition(overlayDragStart.winX + dx, overlayDragStart.winY + dy)
-})
-ipcMain.on('overlay:drag-end', () => {
-  const moved = overlayDragStart?.moved
-  overlayDragStart = null
-  // 只有真正拖动过才落盘(纯点击没移动,无需写)
-  if (moved && overlayWindow && !overlayWindow.isDestroyed()) {
-    const [x, y] = overlayWindow.getPosition()
+// ── IPC: overlay pass-through/mode + manual drag ─────────────────────────────
+// Handlers live in ./ipc/overlay; drag state (overlayDragStart) stays here because
+// applyOverlayMode clears it. Injected via getters so behavior is unchanged.
+registerOverlayIpc({
+  getOverlayWindow: () => overlayWindow,
+  isInteractive: () => overlayInteractive,
+  applyOverlayMode,
+  getDragStart: () => overlayDragStart,
+  setDragStart: (d) => {
+    overlayDragStart = d
+  },
+  persistOverlayPos: (x, y) => {
     const { overlayX: _x, overlayY: _y, ...rest } = loadPersistedConfig()
     persistConfig({ ...rest, overlayX: x, overlayY: y })
   }
