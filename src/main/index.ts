@@ -1,5 +1,4 @@
 import { app, BrowserWindow, globalShortcut, session } from 'electron'
-import { join } from 'path'
 import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
