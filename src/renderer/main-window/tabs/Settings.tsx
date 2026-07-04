@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Field } from '../components/Field'
 import { TestRow } from '../components/TestRow'
+import { useServiceTest } from '../hooks/useServiceTest'
 
 export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [apiKey, setApiKey] = useState('')
@@ -17,37 +18,15 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const [answerLang, setAnswerLang] = useState<'zh' | 'en' | 'auto'>('zh')
   const [saved, setSaved] = useState(false)
   const [saveErr, setSaveErr] = useState('')
-  const [llmTest, setLlmTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
-  const [visionTest, setVisionTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
-  const [asrTest, setAsrTest] = useState<{ st: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ st: 'idle', msg: '' })
-
-  const testLlm = async () => {
-    setLlmTest({ st: 'testing', msg: '' })
-    try {
-      const r = await window.electronAPI.testLLM({ apiKey, baseUrl, model })
-      setLlmTest({ st: r.ok ? 'ok' : 'fail', msg: r.message })
-    } catch (e) {
-      setLlmTest({ st: 'fail', msg: e instanceof Error ? e.message : String(e) })
-    }
-  }
-  const testVision = async () => {
-    setVisionTest({ st: 'testing', msg: '' })
-    try {
-      const r = await window.electronAPI.testVision({ apiKey, baseUrl, visionModel })
-      setVisionTest({ st: r.ok ? 'ok' : 'fail', msg: r.message })
-    } catch (e) {
-      setVisionTest({ st: 'fail', msg: e instanceof Error ? e.message : String(e) })
-    }
-  }
-  const testAsr = async () => {
-    setAsrTest({ st: 'testing', msg: '' })
-    try {
-      const r = await window.electronAPI.testASR({ apiKey: asrApiKey, baseUrl: asrBaseUrl, model: asrModel })
-      setAsrTest({ st: r.ok ? 'ok' : 'fail', msg: r.message })
-    } catch (e) {
-      setAsrTest({ st: 'fail', msg: e instanceof Error ? e.message : String(e) })
-    }
-  }
+  const { llmTest, visionTest, asrTest, testLlm, testVision, testAsr } = useServiceTest({
+    apiKey,
+    baseUrl,
+    model,
+    visionModel,
+    asrApiKey,
+    asrBaseUrl,
+    asrModel
+  })
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
