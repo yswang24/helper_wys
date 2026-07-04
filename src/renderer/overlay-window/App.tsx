@@ -1,15 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { parseSegments, renderMarkdownBlock } from '../../shared/markdown'
-
-type LLMStatus = 'idle' | 'streaming' | 'done' | 'error'
-
-interface HistoryItem {
-  id: number
-  question: string
-  answer: string
-  status: LLMStatus
-  errorMsg: string
-}
+import { useStreamingAnswer, type HistoryItem, type LLMStatus } from './hooks/useStreamingAnswer'
 
 export function App() {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -18,7 +9,6 @@ export function App() {
   // Whether the answer view is parked at the bottom. Drives whether streaming output keeps
   // yanking the viewport down — see the auto-scroll effect and onAnswerScroll below.
   const stickToBottomRef = useRef(true)
-  const nextIdRef = useRef(1)
 
   // Recompute "am I at the bottom" on every user/programmatic scroll (40px slack). Once the user
   // scrolls up to re-read earlier content, this goes false and auto-follow pauses; scrolling back
@@ -29,8 +19,8 @@ export function App() {
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
   }, [])
 
-  // LLM history
-  const [history, setHistory] = useState<HistoryItem[]>([])
+  // LLM history + streaming state machine (chunk buffering, RAF flush, id reconciliation).
+  const { history } = useStreamingAnswer(stickToBottomRef)
 
   // ASR state — overlay only displays, main window does the actual capture
   const [listening, setListening] = useState(false)
@@ -144,68 +134,6 @@ export function App() {
   // ── LLM events ──────────────────────────────────────────────────────────────
   // Every event carries the main-process stream id, so chunks/done/error attach to the RIGHT
   // bubble even when streams overlap — instead of blindly mutating the last item.
-  useEffect(() => {
-    // Chunks arrive token-by-token. Buffering them and flushing once per animation frame turns
-    // N setState+markdown-reparse per token into one per frame — the streaming-render win. The
-    // updater stays pure (appends to prev from a const snapshot) so it's StrictMode-safe.
-    const chunkBuf = new Map<number, string>()
-    let flushScheduled = false
-    const flush = () => {
-      flushScheduled = false
-      if (chunkBuf.size === 0) return
-      const deltas = Array.from(chunkBuf.entries())
-      chunkBuf.clear()
-      setHistory((prev) => prev.map((it) => {
-        const d = deltas.find(([id]) => id === it.id)
-        return d ? { ...it, answer: it.answer + d[1] } : it
-      }))
-    }
-    const scheduleFlush = () => {
-      if (flushScheduled) return
-      flushScheduled = true
-      requestAnimationFrame(flush)
-    }
-
-    const unStart = window.electronAPI.onAnswerStart(({ id, question }) => {
-      stickToBottomRef.current = true  // a new answer should always scroll into view
-      setHistory((prev) => [...prev, { id, question, answer: '', status: 'streaming', errorMsg: '' }])
-    })
-    const unChunk = window.electronAPI.onAnswerChunk(({ id, chunk }) => {
-      chunkBuf.set(id, (chunkBuf.get(id) ?? '') + chunk)
-      scheduleFlush()
-    })
-    const unDone = window.electronAPI.onAnswerDone(({ id }) => {
-      flush()  // apply any buffered trailing text before marking done
-      setHistory((prev) => prev.map((it) => (it.id === id ? { ...it, status: 'done' as LLMStatus } : it)))
-    })
-    const unError = window.electronAPI.onAnswerError(({ id, message }) => {
-      flush()  // preserve any buffered partial answer before switching the bubble to error
-      setHistory((prev) => {
-        if (id != null && prev.some((it) => it.id === id)) {
-          return prev.map((it) => (it.id === id ? { ...it, status: 'error' as LLMStatus, errorMsg: message } : it))
-        }
-        // No matching stream (e.g. an empty-key / "busy" error sent with id:null before any start).
-        // Surface a standalone error item instead of dropping it. Negative id can't collide with
-        // main-process stream ids.
-        const synthId = -(nextIdRef.current++)
-        const errItem = { id: synthId, question: '', answer: '', status: 'error' as LLMStatus, errorMsg: message }
-        // If a stream is still live as the last item, keep IT last so the status bar / 停止 button
-        // / auto-scroll stay bound to the live answer — insert the error just before it.
-        const lastIdx = prev.length - 1
-        if (lastIdx >= 0 && prev[lastIdx].status === 'streaming') {
-          return [...prev.slice(0, lastIdx), errItem, prev[lastIdx]]
-        }
-        return [...prev, errItem]
-      })
-    })
-    const unClear = window.electronAPI.onAnswerClear(() => {
-      chunkBuf.clear()
-      flushScheduled = false
-      setHistory([])
-    })
-    return () => { unStart(); unChunk(); unDone(); unError(); unClear() }
-  }, [])
-
   // ── Image text extraction ───────────────────────────────────────────────────
   useEffect(() => {
     const unStatus = window.electronAPI.onImageStatus((status) => {
