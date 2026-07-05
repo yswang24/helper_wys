@@ -101,9 +101,9 @@ describe('useAsrCapture', () => {
     expect(autoAsk).not.toHaveBeenCalled() // interactive mode → manual send only
   })
 
-  it('auto-sends to AI in passthrough mode (overlay is click-through)', async () => {
+  it('auto-sends to AI in passthrough mode without accumulating the draft', async () => {
     overlayMode = 'passthrough'
-    renderHook(() => useAsrCapture(false))
+    const { result } = renderHook(() => useAsrCapture(false))
     await act(async () => {
       await toggle()
     }) // start
@@ -112,6 +112,8 @@ describe('useAsrCapture', () => {
     }) // stop → onstop
     await flush()
     expect(autoAsk).toHaveBeenCalledWith('hello')
+    expect(sendTranscript).toHaveBeenCalledWith({ text: 'hello', isFinal: true }) // still mirrored
+    expect(result.current.draftText).toBe('') // passthrough never touches the draft
   })
 
   it('does NOT auto-send in interactive mode (draft kept for manual send)', async () => {

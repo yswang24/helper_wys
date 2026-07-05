@@ -1,6 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
 import { isHallucinatedText } from '../../../shared/hallucination'
 
+// Filter a raw transcript: drop empties, <2 chars, and Whisper hallucinations. Returns the cleaned
+// text, or null if it should be discarded.
+function cleanTranscript(text: string): string | null {
+  const t = text.trim()
+  if (!t || t.length < 2) return null
+  if (isHallucinatedText(t)) return null
+  return t
+}
+
 // The ⌘⌥X recording state machine, moved verbatim as ONE block from VoiceTab. Deliberately NOT
 // split further: the five refs + two watchdog timers + toggle guard are a single coordinated
 // machine — pulling any apart re-introduces the "first take works, then ⌘⌥X does nothing" bug.
@@ -68,20 +77,6 @@ export function useAsrCapture(active: boolean) {
     } catch (err) {
       setError(`无法获取麦克风权限：${err instanceof Error ? err.message : String(err)}`)
     }
-  }
-
-  // Returns the cleaned transcript that was appended, or null if it was filtered out (too short /
-  // hallucination) — the caller uses the return to decide whether to auto-send in passthrough mode.
-  const appendToDraft = (text: string): string | null => {
-    const t = text.trim()
-    if (!t || t.length < 2) return null
-    if (isHallucinatedText(t)) return null
-    window.electronAPI.sendTranscript({ text: t, isFinal: true }) // mirror live transcript to overlay
-    setDraftText((prev) => {
-      const combined = prev ? prev + ' ' + t : t
-      return combined.slice(-2000) // cap at 2000 chars
-    })
-    return t
   }
 
   const startCapture = async (currentLang: string) => {
@@ -167,12 +162,17 @@ export function useAsrCapture(active: boolean) {
           })
           if (text) {
             setError('')
-            const appended = appendToDraft(text)
-            // In passthrough mode the overlay is click-through, so the user can't press "发送到 AI":
-            // send the transcript straight to the AI. In interactive mode keep the review-then-send
-            // flow (draft stays for manual send).
-            if (appended && (await window.electronAPI.getOverlayMode()) === 'passthrough') {
-              window.electronAPI.autoAsk(appended)
+            const cleaned = cleanTranscript(text)
+            if (cleaned) {
+              window.electronAPI.sendTranscript({ text: cleaned, isFinal: true }) // mirror to overlay
+              if ((await window.electronAPI.getOverlayMode()) === 'passthrough') {
+                // Passthrough: the overlay is click-through, so send straight to the AI — and DON'T
+                // touch the draft. Each take is an independent question; no accumulation.
+                window.electronAPI.autoAsk(cleaned)
+              } else {
+                // Interactive: accumulate in the draft (cap 2000 chars) for review + manual "发送到 AI".
+                setDraftText((prev) => (prev ? prev + ' ' + cleaned : cleaned).slice(-2000))
+              }
             }
           } else if (!silent) {
             setError('未识别到有效语音（可能是噪声、太短，或被降噪过滤）')
