@@ -35,6 +35,11 @@ export function App() {
   const [inputText, setInputText] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  // Editable "recent transcript" box — typeable in interactive mode, read-only in passthrough.
+  // Stays in sync with incoming ASR lines; edits persist until the next transcript or 清空.
+  const transcriptRef = useRef<HTMLTextAreaElement>(null)
+  const [transcriptDraft, setTranscriptDraft] = useState('')
+
   // Image text extraction
   const [extractedText, setExtractedText] = useState('')
   const [showExtracted, setShowExtracted] = useState(false)
@@ -75,7 +80,11 @@ export function App() {
       const target = e.target as HTMLElement
       // Always allow our own input/extracted textareas — they're focused programmatically
       // (e.g. the 输入 button's setTimeout focus), which has no preceding input mousedown.
-      if (target === inputRef.current || target === extractedRef.current) {
+      if (
+        target === inputRef.current ||
+        target === extractedRef.current ||
+        target === transcriptRef.current
+      ) {
         inputClicked = false
         return
       }
@@ -132,6 +141,12 @@ export function App() {
   // 'interactive' = focusable + clickable. Toggle via the header badge / ⌘⌥E / tray.
 
   const allTranscript = finalLines.join(' ')
+
+  // New transcript lines reset the editable draft; while none arrive (e.g. the user is editing),
+  // allTranscript is stable so their edits are preserved.
+  useEffect(() => {
+    setTranscriptDraft(allTranscript)
+  }, [allTranscript])
 
   return (
     // Interactivity is a whole-window mode (see overlayMode): in 'passthrough' the window is
@@ -243,7 +258,11 @@ export function App() {
           >
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs" style={{ color: '#64748b' }}>
-                {listening ? '录音中…(停止后转写)' : '最近转录'}
+                {listening
+                  ? '录音中…(停止后转写)'
+                  : overlayMode === 'interactive'
+                    ? '最近转录 — 可编辑'
+                    : '最近转录'}
               </span>
               {allTranscript && (
                 <div className="flex gap-1.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
@@ -255,7 +274,10 @@ export function App() {
                     清空
                   </button>
                   <button
-                    onClick={() => window.electronAPI.autoAsk(allTranscript)}
+                    onClick={() => {
+                      const t = transcriptDraft.trim()
+                      if (t) window.electronAPI.autoAsk(t)
+                    }}
                     className="text-xs px-2 py-0.5 rounded font-medium"
                     style={{ background: 'rgba(124,58,237,0.25)', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.5)', cursor: 'pointer' }}
                   >
@@ -264,7 +286,25 @@ export function App() {
                 </div>
               )}
             </div>
-            {allTranscript ? (
+            {/* Interactive: editable textarea (fix ASR errors before sending). Passthrough: read-only. */}
+            {overlayMode === 'interactive' ? (
+              <textarea
+                ref={transcriptRef}
+                value={transcriptDraft}
+                onChange={(e) => setTranscriptDraft(e.target.value)}
+                placeholder="等待音频..."
+                rows={2}
+                className="w-full text-xs leading-relaxed resize-none outline-none"
+                style={
+                  {
+                    background: 'transparent',
+                    color: '#94a3b8',
+                    minHeight: 36,
+                    WebkitAppRegion: 'no-drag'
+                  } as React.CSSProperties
+                }
+              />
+            ) : allTranscript ? (
               <div className="text-xs leading-relaxed" style={{ color: '#64748b' }}>
                 {allTranscript}
               </div>

@@ -130,6 +130,7 @@ export function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettin
           ref={draftRef}
           value={draftText}
           onChange={(e) => setDraftText(e.target.value)}
+          readOnly={listening}
           placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 ⌘⌥X 录音，转写结果将出现在这里...'}
           className="flex-1 rounded-lg p-3 text-xs leading-relaxed resize-none outline-none"
           style={{
