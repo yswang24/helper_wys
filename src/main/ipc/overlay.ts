@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import type { BrowserWindow } from 'electron'
-import { SEND } from '../../shared/ipc'
+import { SEND, INVOKE } from '../../shared/ipc'
 
 // Drag state is shared with applyOverlayMode (which clears it), so it stays owned by the caller
 // and is reached through getDragStart/setDragStart. Logic is a verbatim move from index.ts.
@@ -22,6 +22,10 @@ export interface OverlayIpcDeps {
 }
 
 export function registerOverlayIpc(deps: OverlayIpcDeps): void {
+  // Current passthrough/interactive mode — the main window queries it after a transcription to
+  // decide whether to auto-send (passthrough) or leave the draft for manual send (interactive).
+  ipcMain.handle(INVOKE.getOverlayMode, () => (deps.isInteractive() ? 'interactive' : 'passthrough'))
+
   // 仅穿透模式听渲染层的逐元素命中——输入模式整窗捕获,这里直接忽略,防切换瞬间残留的 mousemove
   // 命中又把窗口设回穿透。
   ipcMain.on(SEND.overlaySetIgnoreMouse, (_e, ignore: boolean) => {

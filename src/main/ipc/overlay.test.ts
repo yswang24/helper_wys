@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Capture the ipcMain handlers so we can drive them directly.
 const handlers = new Map<string, (...a: unknown[]) => void>()
 vi.mock('electron', () => ({
-  ipcMain: { on: (ch: string, h: (...a: unknown[]) => void) => handlers.set(ch, h) }
+  ipcMain: {
+    on: (ch: string, h: (...a: unknown[]) => void) => handlers.set(ch, h),
+    handle: (ch: string, h: (...a: unknown[]) => void) => handlers.set(ch, h)
+  }
 }))
 
 import { registerOverlayIpc, type OverlayDragStart } from './overlay'

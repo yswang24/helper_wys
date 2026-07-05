@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── App status ──────────────────────────────────────────────────────────────
   getStatus: () => invoke(INVOKE.getStatus),
+  getOverlayMode: () => invoke(INVOKE.getOverlayMode),
   platform: process.platform,
 
   // ── Config ──────────────────────────────────────────────────────────────────

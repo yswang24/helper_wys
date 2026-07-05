@@ -5,9 +5,11 @@ import { useAsrCapture } from './useAsrCapture'
 
 let toggle: () => Promise<void> | void
 let recorders: FakeRec[] = []
+let overlayMode: 'passthrough' | 'interactive' = 'interactive'
 const startListening = vi.fn()
 const stopListening = vi.fn()
 const sendTranscript = vi.fn()
+const autoAsk = vi.fn()
 const transcribeChunk = vi.fn(() => Promise.resolve('hello'))
 const getUserMedia = vi.fn(() =>
   Promise.resolve({
@@ -34,8 +36,9 @@ class FakeRec {
 
 beforeEach(() => {
   recorders = []
-  ;[startListening, stopListening, sendTranscript, transcribeChunk, getUserMedia].forEach((f) =>
-    f.mockClear()
+  overlayMode = 'interactive'
+  ;[startListening, stopListening, sendTranscript, autoAsk, transcribeChunk, getUserMedia].forEach(
+    (f) => f.mockClear()
   )
   transcribeChunk.mockResolvedValue('hello')
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
@@ -55,8 +58,9 @@ beforeEach(() => {
     startListening,
     stopListening,
     sendTranscript,
-    autoAsk: vi.fn(),
+    autoAsk,
     transcribeChunk,
+    getOverlayMode: () => Promise.resolve(overlayMode),
     onAsrPttToggle: (cb: () => Promise<void> | void) => ((toggle = cb), () => {})
   }
 })
@@ -94,6 +98,33 @@ describe('useAsrCapture', () => {
     expect(sendTranscript).toHaveBeenCalledWith({ text: 'hello', isFinal: true })
     expect(result.current.draftText).toBe('hello')
     expect(result.current.listening).toBe(false)
+    expect(autoAsk).not.toHaveBeenCalled() // interactive mode → manual send only
+  })
+
+  it('auto-sends to AI in passthrough mode (overlay is click-through)', async () => {
+    overlayMode = 'passthrough'
+    renderHook(() => useAsrCapture(false))
+    await act(async () => {
+      await toggle()
+    }) // start
+    await act(async () => {
+      await toggle()
+    }) // stop → onstop
+    await flush()
+    expect(autoAsk).toHaveBeenCalledWith('hello')
+  })
+
+  it('does NOT auto-send in interactive mode (draft kept for manual send)', async () => {
+    overlayMode = 'interactive'
+    renderHook(() => useAsrCapture(false))
+    await act(async () => {
+      await toggle()
+    })
+    await act(async () => {
+      await toggle()
+    })
+    await flush()
+    expect(autoAsk).not.toHaveBeenCalled()
   })
 
   it('8s guard force-resets transcribing if onstop never fires (⌘⌥X not stranded)', async () => {

@@ -26,6 +26,7 @@ interface ElectronAPI {
   endOverlayDrag: () => void
   // Status
   getStatus: () => Promise<AppStatus>
+  getOverlayMode: () => Promise<OverlayMode>
   platform: string
   // Config
   getConfig: () => Promise<FullConfig>

@@ -3,7 +3,7 @@
 // Channels are keyed by (name, DIRECTION): several names are reused across directions
 // (`llm:clear`, `asr:start`, `asr:stop`, `asr:transcript` are BOTH a renderer→main send AND
 // a main→renderer event), so a flat map would silently collapse them. Three maps keep them
-// distinct. Distinct channel NAMES: 33. Distinct (name, direction) tuples: 37 (7 + 16 + 14).
+// distinct. Distinct channel NAMES: 34. Distinct (name, direction) tuples: 38 (8 + 16 + 14).
 //
 // Config wire types come from the canonical shared/config.ts (PublicConfig, ScreenshotMode).
 // `FullConfig` (the flat config:get response) stays here as an IPC-layer type.
@@ -93,6 +93,7 @@ export interface InvokeMap {
     response: ServiceTestResult
   }
   'asr:transcribe': { request: [ArrayBuffer, string, string]; response: string }
+  'overlay:get-mode': { request: []; response: OverlayMode }
 }
 
 // ── Send: renderer → main (fire-and-forget). Value = the payload type (`void` = no payload). ─
@@ -146,7 +147,8 @@ export const INVOKE = {
   testLLM: 'config:test-llm',
   testVision: 'config:test-vision',
   testASR: 'config:test-asr',
-  transcribe: 'asr:transcribe'
+  transcribe: 'asr:transcribe',
+  getOverlayMode: 'overlay:get-mode'
 } as const satisfies Record<string, InvokeChannel>
 
 export const SEND = {
