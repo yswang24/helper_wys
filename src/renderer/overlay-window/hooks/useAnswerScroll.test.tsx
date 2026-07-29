@@ -53,15 +53,23 @@ describe('scrollAnswerByPage', () => {
 
 describe('useAnswerScroll', () => {
   let onScrollRequest: ((direction: AnswerScrollDirection) => void) | undefined
-  const unsubscribe = vi.fn()
+  let onModeChange: ((active: boolean) => void) | undefined
+  const unsubscribeScroll = vi.fn()
+  const unsubscribeMode = vi.fn()
 
   beforeEach(() => {
     onScrollRequest = undefined
-    unsubscribe.mockClear()
+    onModeChange = undefined
+    unsubscribeScroll.mockClear()
+    unsubscribeMode.mockClear()
     ;(window as unknown as { electronAPI: unknown }).electronAPI = {
       onAnswerScroll: (listener: (direction: AnswerScrollDirection) => void) => {
         onScrollRequest = listener
-        return unsubscribe
+        return unsubscribeScroll
+      },
+      onAnswerScrollMode: (listener: (active: boolean) => void) => {
+        onModeChange = listener
+        return unsubscribeMode
       }
     }
   })
@@ -78,7 +86,8 @@ describe('useAnswerScroll', () => {
 
     expect(element.scrollTo).toHaveBeenCalledWith({ top: 260, behavior: 'smooth' })
     unmount()
-    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(unsubscribeScroll).toHaveBeenCalledOnce()
+    expect(unsubscribeMode).toHaveBeenCalledOnce()
   })
 
   it('re-enables auto-follow only after the actual viewport reaches the bottom', () => {
@@ -96,5 +105,19 @@ describe('useAnswerScroll', () => {
     element.scrollTop = 850
     act(() => result.current.onAnswerScroll())
     expect(result.current.stickToBottomRef.current).toBe(false)
+  })
+
+  it('tracks scroll-mode status and cleans up both IPC subscriptions', () => {
+    const { result, unmount } = renderHook(() => useAnswerScroll())
+
+    expect(result.current.scrollModeActive).toBe(false)
+    act(() => onModeChange?.(true))
+    expect(result.current.scrollModeActive).toBe(true)
+    act(() => onModeChange?.(false))
+    expect(result.current.scrollModeActive).toBe(false)
+
+    unmount()
+    expect(unsubscribeScroll).toHaveBeenCalledOnce()
+    expect(unsubscribeMode).toHaveBeenCalledOnce()
   })
 })

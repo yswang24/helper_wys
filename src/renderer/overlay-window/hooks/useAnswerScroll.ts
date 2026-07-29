@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import type { AnswerScrollDirection } from '../../../shared/ipc'
 
 const PAGE_RATIO = 0.8
@@ -45,9 +45,11 @@ export function useAnswerScroll(): {
   scrollRef: MutableRefObject<HTMLDivElement | null>
   stickToBottomRef: MutableRefObject<boolean>
   onAnswerScroll: () => void
+  scrollModeActive: boolean
 } {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
+  const [scrollModeActive, setScrollModeActive] = useState(false)
 
   const onAnswerScroll = useCallback(() => {
     const element = scrollRef.current
@@ -61,7 +63,14 @@ export function useAnswerScroll(): {
     scrollAnswerByPage(element, direction, stickToBottomRef)
   }, [])
 
-  useEffect(() => window.electronAPI.onAnswerScroll(scrollByPage), [scrollByPage])
+  useEffect(() => {
+    const unScroll = window.electronAPI.onAnswerScroll(scrollByPage)
+    const unMode = window.electronAPI.onAnswerScrollMode(setScrollModeActive)
+    return () => {
+      unScroll()
+      unMode()
+    }
+  }, [scrollByPage])
 
-  return { scrollRef, stickToBottomRef, onAnswerScroll }
+  return { scrollRef, stickToBottomRef, onAnswerScroll, scrollModeActive }
 }

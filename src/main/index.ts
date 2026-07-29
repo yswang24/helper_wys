@@ -16,7 +16,14 @@ import { registerLlmIpc } from './ipc/llm'
 import { registerAsrIpc } from './ipc/asr'
 import { registerOverlayIpc } from './ipc/overlay'
 import { OverlayController } from './overlay-controller'
-import { createOverlayAnswerScrollDispatcher } from './overlay-answer-scroll'
+import {
+  ANSWER_SCROLL_MODE_SHORTCUTS,
+  createAnswerScrollMode
+} from './answer-scroll-mode'
+import {
+  createOverlayAnswerScrollDispatcher,
+  createOverlayAnswerScrollModeDispatcher
+} from './overlay-answer-scroll'
 import { WindowManager } from './window-manager'
 
 const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
@@ -45,11 +52,27 @@ const overlayController: OverlayController = new OverlayController({
 const dispatchOverlayAnswerScroll = createOverlayAnswerScrollDispatcher(() =>
   overlayController.getWindow()
 )
+const dispatchOverlayAnswerScrollMode = createOverlayAnswerScrollModeDispatcher(() =>
+  overlayController.getWindow()
+)
+const answerScrollMode = createAnswerScrollMode({
+  register: registerShortcut,
+  unregister: (accelerator) => globalShortcut.unregister(accelerator),
+  dispatch: dispatchOverlayAnswerScroll,
+  broadcast: dispatchOverlayAnswerScrollMode,
+  setTimeout,
+  clearTimeout
+})
 
-function registerShortcut(accelerator: string, handler: () => void): void {
-  if (!globalShortcut.register(accelerator, handler)) {
+function registerShortcut(accelerator: string, handler: () => void): boolean {
+  try {
+    if (globalShortcut.register(accelerator, handler)) return true
     recordShortcutFailure(accelerator, '可能被其他应用占用')
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : '注册时发生未知错误'
+    recordShortcutFailure(accelerator, reason)
   }
+  return false
 }
 
 function recordShortcutFailure(shortcut: string, reason: string): void {
@@ -120,13 +143,10 @@ app.whenReady().then(() => {
   registerShortcut('CommandOrControl+Alt+S', () => windowManager.toggleSelector())
 
   if (process.platform === 'darwin') {
-    fnShiftHotkey.start(
-      {
-        onScreenshot: triggerFullScreenScreenshot,
-        onScrollUp: () => dispatchOverlayAnswerScroll('up'),
-        onScrollDown: () => dispatchOverlayAnswerScroll('down')
-      },
-      (reason) => recordShortcutFailure(FN_SHIFT_SHORTCUT_LABEL, reason)
+    registerShortcut(ANSWER_SCROLL_MODE_SHORTCUTS.toggleUp, () => answerScrollMode.toggle('up'))
+    registerShortcut(ANSWER_SCROLL_MODE_SHORTCUTS.toggleDown, () => answerScrollMode.toggle('down'))
+    fnShiftHotkey.start(triggerFullScreenScreenshot, (reason) =>
+      recordShortcutFailure(FN_SHIFT_SHORTCUT_LABEL, reason)
     )
   }
 })
@@ -135,6 +155,7 @@ app.whenReady().then(() => {
 // 否则 mainWindow 的 close 处理器会 preventDefault 把退出吞掉，进程残留、Dock 图标退不掉。
 app.on('before-quit', () => {
   windowManager.setQuitting(true)
+  answerScrollMode.deactivate()
   fnShiftHotkey.stop()
 })
 
@@ -151,6 +172,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   overlayController.stopHeartbeat()
+  answerScrollMode.deactivate()
   fnShiftHotkey.stop()
   globalShortcut.unregisterAll()
 })

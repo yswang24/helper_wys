@@ -6,11 +6,12 @@ interface OverlayScrollTarget {
   webContents: {
     isDestroyed(): boolean
     send(channel: typeof EVENT.overlayAnswerScroll, payload: AnswerScrollDirection): void
+    send(channel: typeof EVENT.overlayAnswerScrollMode, payload: boolean): void
   }
 }
 
 /**
- * Creates a safe main-to-overlay dispatcher for the global Fn+arrow handlers.
+ * Creates a safe main-to-overlay dispatcher for the global answer-scroll shortcuts.
  *
  * The getter is intentionally resolved on every trigger because OverlayController can rebuild its
  * BrowserWindow after a renderer crash.
@@ -24,5 +25,17 @@ export function createOverlayAnswerScrollDispatcher(
       return
     }
     overlayWindow.webContents.send(EVENT.overlayAnswerScroll, direction)
+  }
+}
+
+export function createOverlayAnswerScrollModeDispatcher(
+  getOverlayWindow: () => OverlayScrollTarget | null
+): (active: boolean) => void {
+  return (active) => {
+    const overlayWindow = getOverlayWindow()
+    if (!overlayWindow || overlayWindow.isDestroyed() || overlayWindow.webContents.isDestroyed()) {
+      return
+    }
+    overlayWindow.webContents.send(EVENT.overlayAnswerScrollMode, active)
   }
 }

@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { INVOKE, SEND, EVENT } from './ipc'
 
 // Locks the channel inventory so a dropped/duplicated channel is caught. 8 invoke + 16 send +
-// 15 event = 39 (name, direction) tuples across 35 distinct channel names (4 names are reused
+// 16 event = 40 (name, direction) tuples across 36 distinct channel names (4 names are reused
 // across the send/event directions).
 describe('IPC channel inventory', () => {
   it('has the expected count per direction', () => {
     expect(Object.keys(INVOKE)).toHaveLength(8)
     expect(Object.keys(SEND)).toHaveLength(16)
-    expect(Object.keys(EVENT)).toHaveLength(15)
+    expect(Object.keys(EVENT)).toHaveLength(16)
   })
 
   it('has no duplicate channel names WITHIN a direction', () => {
@@ -18,9 +18,9 @@ describe('IPC channel inventory', () => {
     }
   })
 
-  it('covers 35 distinct channel names across all directions', () => {
+  it('covers 36 distinct channel names across all directions', () => {
     const all = [...Object.values(INVOKE), ...Object.values(SEND), ...Object.values(EVENT)]
-    expect(new Set(all).size).toBe(35)
+    expect(new Set(all).size).toBe(36)
   })
 
   it('only reuses names across directions for the known bidirectional channels', () => {

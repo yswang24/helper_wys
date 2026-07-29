@@ -41,11 +41,9 @@ describe('FnShiftHotkey', () => {
     ).toBe('/Applications/Helper.app/Contents/Helpers/helper-fn-shift-hotkey')
   })
 
-  it('parses complete and split screenshot and scroll protocol lines', async () => {
+  it('parses complete and split trigger lines without accepting other output', async () => {
     const process = fakeChildProcess()
-    const onScreenshot = vi.fn()
-    const onScrollUp = vi.fn()
-    const onScrollDown = vi.fn()
+    const trigger = vi.fn()
     const unavailable = vi.fn()
     const spawnProcess = vi.fn(() => process.child)
     const hotkey = new FnShiftHotkey({
@@ -54,37 +52,15 @@ describe('FnShiftHotkey', () => {
       spawnProcess
     })
 
-    expect(hotkey.start({ onScreenshot, onScrollUp, onScrollDown }, unavailable)).toBe(true)
-    process.stdout.write('screen')
-    process.stdout.write('shot\nscroll-u')
-    process.stdout.write('p\nignored\ntrigger\nscroll-down\n')
-    await vi.waitFor(() => {
-      expect(onScreenshot).toHaveBeenCalledTimes(2)
-      expect(onScrollUp).toHaveBeenCalledOnce()
-      expect(onScrollDown).toHaveBeenCalledOnce()
-    })
+    expect(hotkey.start(trigger, unavailable)).toBe(true)
+    process.stdout.write('trig')
+    process.stdout.write('ger\nignored\ntrigger\n')
+    await vi.waitFor(() => expect(trigger).toHaveBeenCalledTimes(2))
 
     expect(spawnProcess).toHaveBeenCalledOnce()
     expect(unavailable).not.toHaveBeenCalled()
     hotkey.stop()
     expect(process.kill).toHaveBeenCalledOnce()
-  })
-
-  it('keeps the legacy screenshot-only start overload safe with the extended protocol', async () => {
-    const process = fakeChildProcess()
-    const onScreenshot = vi.fn()
-    const unavailable = vi.fn()
-    const hotkey = new FnShiftHotkey({
-      resolveExecutable: () => '/tmp/helper-fn-shift-hotkey',
-      verifyExecutable: vi.fn(),
-      spawnProcess: () => process.child
-    })
-
-    expect(hotkey.start(onScreenshot, unavailable)).toBe(true)
-    process.stdout.write('scroll-up\ntrigger\nscreenshot\nscroll-down\n')
-    await vi.waitFor(() => expect(onScreenshot).toHaveBeenCalledTimes(2))
-    expect(unavailable).not.toHaveBeenCalled()
-    hotkey.stop()
   })
 
   it('is idempotent and does not report an intentional stop as a failure', () => {

@@ -6,12 +6,25 @@ import { useAnswerScroll } from './hooks/useAnswerScroll'
 import { useOverlayOpacity } from './hooks/useOverlayOpacity'
 import { useOverlayMode } from './hooks/useOverlayMode'
 
+export function AnswerScrollModeBadge({ active }: { active: boolean }) {
+  if (!active) return null
+  return (
+    <span
+      className="text-xs"
+      style={{ color: '#38bdf8' }}
+      title="回答滚动模式已开启：方向键由 Helper 接管，30 秒无操作后自动关闭"
+    >
+      ↕ 回答滚动
+    </span>
+  )
+}
+
 export function App() {
   const panelRef = useRef<HTMLDivElement>(null)
   const answerEndRef = useRef<HTMLDivElement>(null)
-  // Shared by wheel/touch scrolling, Fn+↑/Fn+↓ IPC, and streaming auto-follow. A manual page scroll
+  // Shared by wheel/touch scrolling, global-shortcut IPC, and streaming auto-follow. A manual scroll
   // pauses auto-follow synchronously so the next token cannot yank the viewport back to the bottom.
-  const { scrollRef, stickToBottomRef, onAnswerScroll } = useAnswerScroll()
+  const { scrollRef, stickToBottomRef, onAnswerScroll, scrollModeActive } = useAnswerScroll()
 
   // LLM history + streaming state machine (chunk buffering, RAF flush, id reconciliation).
   const { history } = useStreamingAnswer(stickToBottomRef)
@@ -190,6 +203,7 @@ export function App() {
               ● 监听中
             </span>
           )}
+          <AnswerScrollModeBadge active={scrollModeActive} />
           <div className="ml-auto flex items-center gap-2">
             {/* Mode badge — 纯指示当前模式,不可点。切换只走 ⌘⌥E / 托盘:点击切换会激活本 app、
                 毛玻璃背景重绘导致"跳一下"。pointerEvents:none 保证它永远不参与鼠标命中。 */}

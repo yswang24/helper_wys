@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOverlayMode: (cb: (mode: EventMap['overlay:mode']) => void) => subscribe(EVENT.overlayMode, cb),
   onAnswerScroll: (cb: (direction: EventMap['overlay:answer-scroll']) => void) =>
     subscribe(EVENT.overlayAnswerScroll, cb),
+  onAnswerScrollMode: (cb: (active: EventMap['overlay:answer-scroll-mode']) => void) =>
+    subscribe(EVENT.overlayAnswerScrollMode, cb),
   startOverlayDrag: (x: number, y: number) => send(SEND.overlayDragStart, { x, y }),
   moveOverlayDrag: (x: number, y: number) => send(SEND.overlayDragMove, { x, y }),
   endOverlayDrag: () => send(SEND.overlayDragEnd),

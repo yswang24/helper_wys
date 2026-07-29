@@ -3,7 +3,7 @@
 // Channels are keyed by (name, DIRECTION): several names are reused across directions
 // (`llm:clear`, `asr:start`, `asr:stop`, `asr:transcript` are BOTH a renderer→main send AND
 // a main→renderer event), so a flat map would silently collapse them. Three maps keep them
-// distinct. Distinct channel NAMES: 35. Distinct (name, direction) tuples: 39 (8 + 16 + 15).
+// distinct. Distinct channel NAMES: 36. Distinct (name, direction) tuples: 40 (8 + 16 + 16).
 //
 // Config wire types come from the canonical shared/config.ts (PublicConfig, ScreenshotMode).
 // `FullConfig` (the flat config:get response) stays here as an IPC-layer type.
@@ -122,6 +122,7 @@ export interface EventMap {
   'overlay:mode': OverlayMode
   'overlay:opacity': number
   'overlay:answer-scroll': AnswerScrollDirection
+  'overlay:answer-scroll-mode': boolean
   'llm:start': AnswerStart
   'llm:chunk': AnswerChunk
   'llm:done': AnswerDone
@@ -176,6 +177,7 @@ export const EVENT = {
   overlayMode: 'overlay:mode',
   overlayOpacity: 'overlay:opacity',
   overlayAnswerScroll: 'overlay:answer-scroll',
+  overlayAnswerScrollMode: 'overlay:answer-scroll-mode',
   llmStart: 'llm:start',
   llmChunk: 'llm:chunk',
   llmDone: 'llm:done',

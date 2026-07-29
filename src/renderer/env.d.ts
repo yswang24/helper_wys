@@ -23,6 +23,7 @@ interface ElectronAPI {
   requestOverlayMode: (interactive: boolean) => void
   onOverlayMode: (cb: (mode: OverlayMode) => void) => UnlistenFn
   onAnswerScroll: (cb: (direction: AnswerScrollDirection) => void) => UnlistenFn
+  onAnswerScrollMode: (cb: (active: boolean) => void) => UnlistenFn
   startOverlayDrag: (x: number, y: number) => void
   moveOverlayDrag: (x: number, y: number) => void
   endOverlayDrag: () => void

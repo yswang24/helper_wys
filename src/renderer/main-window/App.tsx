@@ -111,8 +111,11 @@ export function App() {
         <span><kbd className="font-mono">⌘⌥S</kbd> 截图解题</span>
         {status?.platform === 'darwin' && (
           <>
+            <span>
+              <kbd className="font-mono">⌘⌥↑ / ⌘⌥↓</kbd>{' '}
+              滚动模式（再按关闭；↑↓ 由 Helper 接管；30 秒无操作关闭）
+            </span>
             <span><kbd className="font-mono">fn⇧</kbd> 全屏直发</span>
-            <span><kbd className="font-mono">fn↑ / fn↓</kbd> 滚动回答</span>
           </>
         )}
       </div>

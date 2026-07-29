@@ -3,9 +3,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { App } from './App'
 
+let platform = 'darwin'
+
 // All three tabs stay mounted (display:none) so their listeners (e.g. onAsrPttToggle) keep working
 // regardless of the active tab. This guards that invariant after the tab split.
 beforeEach(() => {
+  platform = 'darwin'
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
   Object.defineProperty(navigator, 'mediaDevices', {
     configurable: true,
@@ -25,12 +28,12 @@ beforeEach(() => {
             Promise.resolve({
               contentProtection: true,
               overlayVisible: false,
-              platform: 'darwin',
+              platform,
               version: '1.0.0',
               failedShortcuts: []
             })
         if (prop === 'getConfig' || prop === 'getPublicConfig') return () => Promise.resolve({})
-        if (prop === 'platform') return 'darwin'
+        if (prop === 'platform') return platform
         if (prop.startsWith('on')) return noopUnsub
         return () => {}
       }
@@ -46,6 +49,17 @@ describe('main-window App', () => {
     expect(screen.getByText('默认输入设备（麦克风）')).toBeInTheDocument() // Voice
     expect(screen.getByText('API Key')).toBeInTheDocument() // Settings
     expect(await screen.findByText('fn⇧')).toBeInTheDocument()
-    expect(screen.getByText('fn↑ / fn↓')).toBeInTheDocument()
+    expect(screen.getByText('⌘⌥↑ / ⌘⌥↓')).toBeInTheDocument()
+    expect(screen.getByText(/滚动模式（再按关闭/)).toBeInTheDocument()
+  })
+
+  it('does not advertise macOS-only shortcuts on other platforms', async () => {
+    platform = 'win32'
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByText('手动输入问题')).toBeInTheDocument())
+    expect(screen.queryByText('fn⇧')).not.toBeInTheDocument()
+    expect(screen.queryByText('⌘⌥↑ / ⌘⌥↓')).not.toBeInTheDocument()
+    expect(screen.queryByText(/滚动模式（再按关闭/)).not.toBeInTheDocument()
   })
 })
