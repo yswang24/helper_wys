@@ -3,7 +3,9 @@ import { describe, it, expect, vi } from 'vitest'
 // Fakes for the electron/node boundaries so captureRegionNative's finally-unlink is testable.
 const unlinkMock = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 vi.mock('electron', () => ({
-  nativeImage: { createFromPath: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }) }) },
+  nativeImage: {
+    createFromPath: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }) })
+  },
   desktopCapturer: { getSources: () => Promise.resolve([]) }
 }))
 vi.mock('child_process', () => ({
@@ -14,7 +16,10 @@ vi.mock('fs/promises', () => ({ unlink: unlinkMock }))
 
 import { computeNativeRect, computeCropRect, captureRegionNative } from './capture'
 
-const fakeDisplay = { bounds: { x: 0, y: 0, width: 100, height: 100 }, scaleFactor: 1 } as unknown as Electron.Display
+const fakeDisplay = {
+  bounds: { x: 0, y: 0, width: 100, height: 100 },
+  scaleFactor: 1
+} as unknown as Electron.Display
 
 // Characterization tests: lock the exact alignment math (currently untested and user-visible)
 // before the capture module moves in Step 2.2.
@@ -34,6 +39,14 @@ describe('computeNativeRect', () => {
       { x: 10, y: 20, w: 30, h: 40 }
     )
     expect(r).toEqual({ gx: 310, gy: 60, gw: 30, gh: 40 })
+  })
+
+  it('maps a complete secondary display with a negative global origin', () => {
+    const r = computeNativeRect(
+      { x: -1728, y: 0, width: 1728, height: 1117 },
+      { x: 0, y: 0, w: 1728, h: 1117, vw: 1728, vh: 1117 }
+    )
+    expect(r).toEqual({ gx: -1728, gy: 0, gw: 1728, gh: 1117 })
   })
 
   it('floors width/height to at least 1', () => {

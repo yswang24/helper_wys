@@ -60,7 +60,8 @@ export function App() {
           className="px-4 py-2 text-xs"
           style={{ background: 'rgba(217,119,6,0.12)', borderBottom: '1px solid rgba(217,119,6,0.3)', color: '#fbbf24' }}
         >
-          ⚠ 以下快捷键注册失败（可能被其他应用占用）：{status.failedShortcuts.join('、')}
+          ⚠ 以下快捷键不可用（可能被占用或系统组件启动失败）：
+          {status.failedShortcuts.join('、')}
         </div>
       )}
 
@@ -108,6 +109,9 @@ export function App() {
         <span><kbd className="font-mono">⌘⌥H</kbd> 覆盖层</span>
         <span><kbd className="font-mono">⌘⌥X</kbd> 录音开关</span>
         <span><kbd className="font-mono">⌘⌥S</kbd> 截图解题</span>
+        {status?.platform === 'darwin' && (
+          <span><kbd className="font-mono">fn⇧</kbd> 全屏直发</span>
+        )}
       </div>
     </div>
   )

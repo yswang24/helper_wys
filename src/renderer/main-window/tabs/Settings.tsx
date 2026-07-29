@@ -197,7 +197,7 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       />
       <Field
         label="视觉模型（截图解题）"
-        hint="支持图像输入的模型，用于 ⌘⌥S 截图模式"
+        hint="支持图像输入的模型，用于 ⌘⌥S 框选和 fn⇧ 全屏直发"
         value={visionModel}
         onChange={setVisionModel}
         placeholder="gpt-4o / deepseek-vl2"

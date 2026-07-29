@@ -6,7 +6,8 @@ import { File as NodeFile } from 'node:buffer'
 import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection, setMainWindow } from './llm'
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
-import { registerScreenshotIpc } from './screenshot'
+import { createFullScreenCaptureTrigger, registerScreenshotIpc } from './screenshot'
+import { FN_SHIFT_SHORTCUT_LABEL, FnShiftHotkey } from './fn-shift-hotkey'
 import { registerConfigIpc } from './config'
 import { createStreamSafe } from './stream-safe'
 import { registerAppIpc } from './ipc/app'
@@ -17,7 +18,8 @@ import { registerOverlayIpc } from './ipc/overlay'
 import { OverlayController } from './overlay-controller'
 import { WindowManager } from './window-manager'
 
-const failedShortcuts: string[] = []  // accelerators another app already grabbed — surfaced in the UI
+const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
+const fnShiftHotkey = new FnShiftHotkey()
 
 // WindowManager owns the main/selector windows + tray; OverlayController owns the stealth overlay.
 // They reference each other lazily (tray reads overlay state; overlay crash-rebuild reads
@@ -42,9 +44,13 @@ const overlayController: OverlayController = new OverlayController({
 
 function registerShortcut(accelerator: string, handler: () => void): void {
   if (!globalShortcut.register(accelerator, handler)) {
-    failedShortcuts.push(accelerator)
-    console.warn(`[Shortcut] 注册失败（可能被其他应用占用）: ${accelerator}`)
+    recordShortcutFailure(accelerator, '可能被其他应用占用')
   }
+}
+
+function recordShortcutFailure(shortcut: string, reason: string): void {
+  if (!failedShortcuts.includes(shortcut)) failedShortcuts.push(shortcut)
+  console.warn(`[Shortcut] ${shortcut} 不可用: ${reason}`)
 }
 
 // Defense-in-depth for every window: block navigation away from the bundled renderer and deny
@@ -108,12 +114,19 @@ app.whenReady().then(() => {
 
   // Activate region selector for coding screenshot
   registerShortcut('CommandOrControl+Alt+S', () => windowManager.toggleSelector())
+
+  if (process.platform === 'darwin') {
+    fnShiftHotkey.start(triggerFullScreenScreenshot, (reason) =>
+      recordShortcutFailure(FN_SHIFT_SHORTCUT_LABEL, reason)
+    )
+  }
 })
 
 // 任何退出路径（⌘Q、右键 Dock→退出、托盘退出、app.quit()）都先置位。
 // 否则 mainWindow 的 close 处理器会 preventDefault 把退出吞掉，进程残留、Dock 图标退不掉。
 app.on('before-quit', () => {
   windowManager.setQuitting(true)
+  fnShiftHotkey.stop()
 })
 
 // macOS：点击程序坞图标会触发 'activate'。主窗口被 X 关闭后只是隐藏（见 close 处理器），
@@ -129,6 +142,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   overlayController.stopHeartbeat()
+  fnShiftHotkey.stop()
   globalShortcut.unregisterAll()
 })
 
@@ -193,9 +207,10 @@ registerClipboardIpc()
 
 // ── IPC: screenshot / coding mode ────────────────────────────────────────────
 
-// Capture math + screencapture/desktopCapturer live in ./screenshot; the handler is registered
-// here (module-eval, before windows exist) with getter deps so it always sees the live windows.
-registerScreenshotIpc({
+// Capture math + screencapture/desktopCapturer live in ./screenshot; the handlers and full-screen
+// trigger are created here (module-eval, before windows exist) with getter deps so they always see
+// the live windows.
+const screenshotDeps = {
   getOverlayWindow: () => overlayController.getWindow(),
   getSelectorWindow: () => windowManager.getSelectorWindow(),
   getSelectorDisplayId: () => windowManager.getSelectorDisplayId(),
@@ -204,4 +219,6 @@ registerScreenshotIpc({
   streamImageAnswer,
   extractImageText,
   loadPersistedConfig
-})
+}
+registerScreenshotIpc(screenshotDeps)
+const triggerFullScreenScreenshot = createFullScreenCaptureTrigger(screenshotDeps)

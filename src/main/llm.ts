@@ -16,7 +16,8 @@ export interface LLMConfig {
   // 回答语言：'zh' 固定中文（旧行为）/ 'en' 固定英文 / 'auto' 跟随提问语言。
   // 字符串而非联合类型：config:set 的 IPC 载荷是 Record<string, string>，与其它字段保持一致。
   answerLang: string
-  // Custom instruction sent alongside the screenshot in direct-solve mode (⌘⌥S). Empty = default.
+  // Custom instruction sent alongside screenshots in direct-solve mode (⌘⌥S / Fn+Shift).
+  // Empty = default.
   screenshotPrompt: string
 }
 

@@ -4,6 +4,7 @@
   "description": "A lightweight desktop helper",
   "main": "out/main/index.js",
   "scripts": {
+    "predev": "node scripts/build-macos-hotkey.mjs",
     "dev": "electron-vite dev",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
@@ -12,6 +13,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prebuild": "node scripts/build-macos-hotkey.mjs",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
     "package": "npm run build && node scripts/package.mjs",
@@ -93,6 +95,12 @@
       "shortcutName": "Helper"
     },
     "mac": {
+      "extraFiles": [
+        {
+          "from": ".native-build/helper-fn-shift-hotkey",
+          "to": "Helpers/helper-fn-shift-hotkey"
+        }
+      ],
       "target": [
         {
           "target": "dmg",
