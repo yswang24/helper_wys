@@ -3,13 +3,14 @@
 // Channels are keyed by (name, DIRECTION): several names are reused across directions
 // (`llm:clear`, `asr:start`, `asr:stop`, `asr:transcript` are BOTH a renderer→main send AND
 // a main→renderer event), so a flat map would silently collapse them. Three maps keep them
-// distinct. Distinct channel NAMES: 34. Distinct (name, direction) tuples: 38 (8 + 16 + 14).
+// distinct. Distinct channel NAMES: 35. Distinct (name, direction) tuples: 39 (8 + 16 + 15).
 //
 // Config wire types come from the canonical shared/config.ts (PublicConfig, ScreenshotMode).
 // `FullConfig` (the flat config:get response) stays here as an IPC-layer type.
 import type { ScreenshotMode, PublicConfig } from './config'
 
 export type OverlayMode = 'passthrough' | 'interactive'
+export type AnswerScrollDirection = 'up' | 'down'
 export type { ScreenshotMode, PublicConfig }
 
 export interface ScreenRegion {
@@ -120,6 +121,7 @@ export interface SendMap {
 export interface EventMap {
   'overlay:mode': OverlayMode
   'overlay:opacity': number
+  'overlay:answer-scroll': AnswerScrollDirection
   'llm:start': AnswerStart
   'llm:chunk': AnswerChunk
   'llm:done': AnswerDone
@@ -173,6 +175,7 @@ export const SEND = {
 export const EVENT = {
   overlayMode: 'overlay:mode',
   overlayOpacity: 'overlay:opacity',
+  overlayAnswerScroll: 'overlay:answer-scroll',
   llmStart: 'llm:start',
   llmChunk: 'llm:chunk',
   llmDone: 'llm:done',

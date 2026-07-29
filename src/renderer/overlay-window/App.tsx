@@ -2,25 +2,16 @@ import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { parseSegments, renderMarkdownBlock } from '../../shared/markdown'
 import { useStreamingAnswer, type HistoryItem, type LLMStatus } from './hooks/useStreamingAnswer'
 import { useAsrDisplay } from './hooks/useAsrDisplay'
+import { useAnswerScroll } from './hooks/useAnswerScroll'
 import { useOverlayOpacity } from './hooks/useOverlayOpacity'
 import { useOverlayMode } from './hooks/useOverlayMode'
 
 export function App() {
   const panelRef = useRef<HTMLDivElement>(null)
   const answerEndRef = useRef<HTMLDivElement>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  // Whether the answer view is parked at the bottom. Drives whether streaming output keeps
-  // yanking the viewport down — see the auto-scroll effect and onAnswerScroll below.
-  const stickToBottomRef = useRef(true)
-
-  // Recompute "am I at the bottom" on every user/programmatic scroll (40px slack). Once the user
-  // scrolls up to re-read earlier content, this goes false and auto-follow pauses; scrolling back
-  // to the bottom re-arms it.
-  const onAnswerScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-  }, [])
+  // Shared by wheel/touch scrolling, Fn+↑/Fn+↓ IPC, and streaming auto-follow. A manual page scroll
+  // pauses auto-follow synchronously so the next token cannot yank the viewport back to the bottom.
+  const { scrollRef, stickToBottomRef, onAnswerScroll } = useAnswerScroll()
 
   // LLM history + streaming state machine (chunk buffering, RAF flush, id reconciliation).
   const { history } = useStreamingAnswer(stickToBottomRef)
@@ -134,7 +125,7 @@ export function App() {
     // to re-read a point, don't drag them back down on every token (a new answer re-pins via
     // onAnswerStart). This is the difference between "回看可用" and "回看被打断".
     if (stickToBottomRef.current) answerEndRef.current?.scrollIntoView({ behavior: 'auto' })
-  }, [lastAnswer])
+  }, [lastAnswer, stickToBottomRef])
 
   // Mouse pass-through & activation are driven by the main process per mode (index.ts
   // applyOverlayMode): 'passthrough' = whole-window click-through + non-focusable (no 切屏);
@@ -649,4 +640,3 @@ const AnswerText = memo(function AnswerText({ text, streaming }: { text: string;
     </div>
   )
 })
-

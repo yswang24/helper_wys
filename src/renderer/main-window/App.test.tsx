@@ -46,5 +46,6 @@ describe('main-window App', () => {
     expect(screen.getByText('默认输入设备（麦克风）')).toBeInTheDocument() // Voice
     expect(screen.getByText('API Key')).toBeInTheDocument() // Settings
     expect(await screen.findByText('fn⇧')).toBeInTheDocument()
+    expect(screen.getByText('fn↑ / fn↓')).toBeInTheDocument()
   })
 })

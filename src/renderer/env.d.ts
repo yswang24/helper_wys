@@ -7,6 +7,7 @@ import type {
   TranscriptData,
   ScreenRegion,
   OverlayMode,
+  AnswerScrollDirection,
   ServiceTestResult,
   AnswerStart,
   AnswerChunk,
@@ -21,6 +22,7 @@ interface ElectronAPI {
   setIgnoreMouse: (ignore: boolean) => void
   requestOverlayMode: (interactive: boolean) => void
   onOverlayMode: (cb: (mode: OverlayMode) => void) => UnlistenFn
+  onAnswerScroll: (cb: (direction: AnswerScrollDirection) => void) => UnlistenFn
   startOverlayDrag: (x: number, y: number) => void
   moveOverlayDrag: (x: number, y: number) => void
   endOverlayDrag: () => void

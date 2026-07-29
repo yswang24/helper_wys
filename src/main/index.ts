@@ -16,6 +16,7 @@ import { registerLlmIpc } from './ipc/llm'
 import { registerAsrIpc } from './ipc/asr'
 import { registerOverlayIpc } from './ipc/overlay'
 import { OverlayController } from './overlay-controller'
+import { createOverlayAnswerScrollDispatcher } from './overlay-answer-scroll'
 import { WindowManager } from './window-manager'
 
 const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
@@ -41,6 +42,9 @@ const overlayController: OverlayController = new OverlayController({
   isQuitting: () => windowManager.isQuitting(),
   onVisibilityChange: () => windowManager.updateTrayMenu()
 })
+const dispatchOverlayAnswerScroll = createOverlayAnswerScrollDispatcher(() =>
+  overlayController.getWindow()
+)
 
 function registerShortcut(accelerator: string, handler: () => void): void {
   if (!globalShortcut.register(accelerator, handler)) {
@@ -116,8 +120,13 @@ app.whenReady().then(() => {
   registerShortcut('CommandOrControl+Alt+S', () => windowManager.toggleSelector())
 
   if (process.platform === 'darwin') {
-    fnShiftHotkey.start(triggerFullScreenScreenshot, (reason) =>
-      recordShortcutFailure(FN_SHIFT_SHORTCUT_LABEL, reason)
+    fnShiftHotkey.start(
+      {
+        onScreenshot: triggerFullScreenScreenshot,
+        onScrollUp: () => dispatchOverlayAnswerScroll('up'),
+        onScrollDown: () => dispatchOverlayAnswerScroll('down')
+      },
+      (reason) => recordShortcutFailure(FN_SHIFT_SHORTCUT_LABEL, reason)
     )
   }
 })

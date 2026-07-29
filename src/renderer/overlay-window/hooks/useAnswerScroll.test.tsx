@@ -1,0 +1,100 @@
+// @vitest-environment jsdom
+import { act, renderHook } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AnswerScrollDirection } from '../../../shared/ipc'
+import { scrollAnswerByPage, useAnswerScroll } from './useAnswerScroll'
+
+interface FakeScrollElement {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+  scrollTo: ReturnType<typeof vi.fn>
+}
+
+function fakeScrollElement(overrides: Partial<FakeScrollElement> = {}): FakeScrollElement {
+  return {
+    scrollTop: 500,
+    scrollHeight: 1_200,
+    clientHeight: 300,
+    scrollTo: vi.fn(),
+    ...overrides
+  }
+}
+
+describe('scrollAnswerByPage', () => {
+  it('smoothly scrolls by 80% of the answer viewport in either direction', () => {
+    const element = fakeScrollElement()
+    const stickToBottomRef = { current: true }
+
+    scrollAnswerByPage(element, 'up', stickToBottomRef)
+    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 260, behavior: 'smooth' })
+    expect(stickToBottomRef.current).toBe(false)
+
+    scrollAnswerByPage(element, 'down', stickToBottomRef)
+    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 740, behavior: 'smooth' })
+  })
+
+  it('clamps at both boundaries and is a no-op when the content does not overflow', () => {
+    const stickToBottomRef = { current: true }
+    const top = fakeScrollElement({ scrollTop: 20 })
+    scrollAnswerByPage(top, 'up', stickToBottomRef)
+    expect(top.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' })
+
+    const bottom = fakeScrollElement({ scrollTop: 850 })
+    scrollAnswerByPage(bottom, 'down', stickToBottomRef)
+    expect(bottom.scrollTo).toHaveBeenCalledWith({ top: 900, behavior: 'smooth' })
+
+    const fitted = fakeScrollElement({ scrollTop: 0, scrollHeight: 300, clientHeight: 300 })
+    scrollAnswerByPage(fitted, 'down', stickToBottomRef)
+    expect(fitted.scrollTo).not.toHaveBeenCalled()
+    expect(stickToBottomRef.current).toBe(true)
+  })
+})
+
+describe('useAnswerScroll', () => {
+  let onScrollRequest: ((direction: AnswerScrollDirection) => void) | undefined
+  const unsubscribe = vi.fn()
+
+  beforeEach(() => {
+    onScrollRequest = undefined
+    unsubscribe.mockClear()
+    ;(window as unknown as { electronAPI: unknown }).electronAPI = {
+      onAnswerScroll: (listener: (direction: AnswerScrollDirection) => void) => {
+        onScrollRequest = listener
+        return unsubscribe
+      }
+    }
+  })
+
+  it('routes IPC to the answer element and pauses streaming auto-follow before scrolling', () => {
+    const element = fakeScrollElement()
+    const { result, unmount } = renderHook(() => useAnswerScroll())
+    result.current.scrollRef.current = element as unknown as HTMLDivElement
+    element.scrollTo.mockImplementation(() => {
+      expect(result.current.stickToBottomRef.current).toBe(false)
+    })
+
+    act(() => onScrollRequest?.('up'))
+
+    expect(element.scrollTo).toHaveBeenCalledWith({ top: 260, behavior: 'smooth' })
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('re-enables auto-follow only after the actual viewport reaches the bottom', () => {
+    const element = fakeScrollElement({ scrollTop: 500 })
+    const { result } = renderHook(() => useAnswerScroll())
+    result.current.scrollRef.current = element as unknown as HTMLDivElement
+
+    act(() => onScrollRequest?.('down'))
+    expect(result.current.stickToBottomRef.current).toBe(false)
+
+    element.scrollTop = 900
+    act(() => result.current.onAnswerScroll())
+    expect(result.current.stickToBottomRef.current).toBe(true)
+
+    element.scrollTop = 850
+    act(() => result.current.onAnswerScroll())
+    expect(result.current.stickToBottomRef.current).toBe(false)
+  })
+})

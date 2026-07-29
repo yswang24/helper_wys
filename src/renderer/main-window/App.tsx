@@ -110,7 +110,10 @@ export function App() {
         <span><kbd className="font-mono">⌘⌥X</kbd> 录音开关</span>
         <span><kbd className="font-mono">⌘⌥S</kbd> 截图解题</span>
         {status?.platform === 'darwin' && (
-          <span><kbd className="font-mono">fn⇧</kbd> 全屏直发</span>
+          <>
+            <span><kbd className="font-mono">fn⇧</kbd> 全屏直发</span>
+            <span><kbd className="font-mono">fn↑ / fn↓</kbd> 滚动回答</span>
+          </>
         )}
       </div>
     </div>

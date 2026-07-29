@@ -3,13 +3,19 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-export const FN_SHIFT_SHORTCUT_LABEL = 'Fn+Shift'
+export const FN_SHIFT_SHORTCUT_LABEL = 'Fn+Shift / Fn+↑ / Fn+↓'
 const HELPER_EXECUTABLE = 'helper-fn-shift-hotkey'
 
 export interface FnShiftHotkeyOptions {
   resolveExecutable?: () => string
   verifyExecutable?: (path: string) => void
   spawnProcess?: (path: string) => ChildProcess
+}
+
+export interface FnHotkeyHandlers {
+  onScreenshot: () => void
+  onScrollUp: () => void
+  onScrollDown: () => void
 }
 
 export interface FnShiftHotkeyPathContext {
@@ -46,10 +52,10 @@ function defaultSpawnProcess(path: string): ChildProcess {
 }
 
 /**
- * Owns the tiny macOS helper that observes only global modifier flags.
+ * Owns the tiny macOS helper that observes global Fn, Shift, and arrow key state.
  *
- * Electron accelerators cannot express Fn or a modifier-only chord. The native helper polls
- * CoreGraphics' hardware modifier state and emits one line for each Fn+Shift rising edge.
+ * Electron accelerators cannot express Fn or a modifier-only chord. The native helper emits
+ * newline-delimited screenshot and scroll events without granting renderer code global input access.
  */
 export class FnShiftHotkey {
   private child: ChildProcess | null = null
@@ -57,8 +63,22 @@ export class FnShiftHotkey {
 
   constructor(private readonly options: FnShiftHotkeyOptions = {}) {}
 
-  start(onTrigger: () => void, onUnavailable: (reason: string) => void): boolean {
+  start(handlers: FnHotkeyHandlers, onUnavailable: (reason: string) => void): boolean
+  start(onScreenshot: () => void, onUnavailable: (reason: string) => void): boolean
+  start(
+    handlersOrScreenshot: FnHotkeyHandlers | (() => void),
+    onUnavailable: (reason: string) => void
+  ): boolean {
     if (this.child) return true
+
+    const handlers: FnHotkeyHandlers =
+      typeof handlersOrScreenshot === 'function'
+        ? {
+            onScreenshot: handlersOrScreenshot,
+            onScrollUp: () => {},
+            onScrollDown: () => {}
+          }
+        : handlersOrScreenshot
 
     const executable = (this.options.resolveExecutable ?? defaultExecutablePath)()
     try {
@@ -101,7 +121,20 @@ export class FnShiftHotkey {
       while (newline >= 0) {
         const line = this.stdoutBuffer.slice(0, newline).trim()
         this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1)
-        if (line === 'trigger' && this.child === child) onTrigger()
+        if (this.child === child) {
+          switch (line) {
+            case 'trigger':
+            case 'screenshot':
+              handlers.onScreenshot()
+              break
+            case 'scroll-up':
+              handlers.onScrollUp()
+              break
+            case 'scroll-down':
+              handlers.onScrollDown()
+              break
+          }
+        }
         newline = this.stdoutBuffer.indexOf('\n')
       }
     })

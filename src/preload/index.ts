@@ -26,7 +26,7 @@ function send<K extends SendChannel>(channel: K, payload?: SendMap[K]): void {
   ipcRenderer.send(channel, payload)
 }
 
-// Collapses the 12 identical define/on/removeListener listener blocks into one helper.
+// Collapses the identical define/on/removeListener blocks into one helper.
 function subscribe<K extends EventChannel>(
   channel: K,
   cb: (payload: EventMap[K]) => void
@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setIgnoreMouse: (ignore: boolean) => send(SEND.overlaySetIgnoreMouse, ignore),
   requestOverlayMode: (interactive: boolean) => send(SEND.overlayRequestMode, interactive),
   onOverlayMode: (cb: (mode: EventMap['overlay:mode']) => void) => subscribe(EVENT.overlayMode, cb),
+  onAnswerScroll: (cb: (direction: EventMap['overlay:answer-scroll']) => void) =>
+    subscribe(EVENT.overlayAnswerScroll, cb),
   startOverlayDrag: (x: number, y: number) => send(SEND.overlayDragStart, { x, y }),
   moveOverlayDrag: (x: number, y: number) => send(SEND.overlayDragMove, { x, y }),
   endOverlayDrag: () => send(SEND.overlayDragEnd),
