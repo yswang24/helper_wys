@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import type { AnswerScrollDirection } from '../../../shared/ipc'
 
-const PAGE_RATIO = 0.8
+const PAGE_RATIO = 0.6
 const BOTTOM_SLACK_PX = 40
 
 interface ScrollElement {

@@ -22,16 +22,16 @@ function fakeScrollElement(overrides: Partial<FakeScrollElement> = {}): FakeScro
 }
 
 describe('scrollAnswerByPage', () => {
-  it('smoothly scrolls by 80% of the answer viewport in either direction', () => {
+  it('smoothly scrolls by 60% of the answer viewport in either direction', () => {
     const element = fakeScrollElement()
     const stickToBottomRef = { current: true }
 
     scrollAnswerByPage(element, 'up', stickToBottomRef)
-    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 260, behavior: 'smooth' })
+    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 320, behavior: 'smooth' })
     expect(stickToBottomRef.current).toBe(false)
 
     scrollAnswerByPage(element, 'down', stickToBottomRef)
-    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 740, behavior: 'smooth' })
+    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 680, behavior: 'smooth' })
   })
 
   it('clamps at both boundaries and is a no-op when the content does not overflow', () => {
@@ -84,7 +84,7 @@ describe('useAnswerScroll', () => {
 
     act(() => onScrollRequest?.('up'))
 
-    expect(element.scrollTo).toHaveBeenCalledWith({ top: 260, behavior: 'smooth' })
+    expect(element.scrollTo).toHaveBeenCalledWith({ top: 320, behavior: 'smooth' })
     unmount()
     expect(unsubscribeScroll).toHaveBeenCalledOnce()
     expect(unsubscribeMode).toHaveBeenCalledOnce()
