@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import type { AnswerScrollDirection } from '../../../shared/ipc'
+import { syncAutoFollowFromScroll } from './useResumeStreamingAutoFollow'
 
 const PAGE_RATIO = 0.6
 const BOTTOM_SLACK_PX = 40
@@ -24,8 +25,11 @@ export function isAnswerAtBottom(element: ScrollElement): boolean {
 export function scrollAnswerByPage(
   element: ScrollElement,
   direction: AnswerScrollDirection,
-  stickToBottomRef: MutableRefObject<boolean>
+  stickToBottomRef: MutableRefObject<boolean>,
+  resumeLiveTailRef: MutableRefObject<boolean>
 ): void {
+  // A new explicit reading action supersedes any short-lived exit/resume protection.
+  resumeLiveTailRef.current = false
   const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
   const currentScrollTop = Math.min(maxScrollTop, Math.max(0, element.scrollTop))
   const step = Math.max(1, Math.round(element.clientHeight * PAGE_RATIO))
@@ -44,23 +48,25 @@ export function scrollAnswerByPage(
 export function useAnswerScroll(): {
   scrollRef: MutableRefObject<HTMLDivElement | null>
   stickToBottomRef: MutableRefObject<boolean>
+  resumeLiveTailRef: MutableRefObject<boolean>
   onAnswerScroll: () => void
   scrollModeActive: boolean
 } {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
+  const resumeLiveTailRef = useRef(false)
   const [scrollModeActive, setScrollModeActive] = useState(false)
 
   const onAnswerScroll = useCallback(() => {
     const element = scrollRef.current
     if (!element) return
-    stickToBottomRef.current = isAnswerAtBottom(element)
+    syncAutoFollowFromScroll(element, stickToBottomRef, resumeLiveTailRef)
   }, [])
 
   const scrollByPage = useCallback((direction: AnswerScrollDirection) => {
     const element = scrollRef.current
     if (!element) return
-    scrollAnswerByPage(element, direction, stickToBottomRef)
+    scrollAnswerByPage(element, direction, stickToBottomRef, resumeLiveTailRef)
   }, [])
 
   useEffect(() => {
@@ -72,5 +78,11 @@ export function useAnswerScroll(): {
     }
   }, [scrollByPage])
 
-  return { scrollRef, stickToBottomRef, onAnswerScroll, scrollModeActive }
+  return {
+    scrollRef,
+    stickToBottomRef,
+    resumeLiveTailRef,
+    onAnswerScroll,
+    scrollModeActive
+  }
 }

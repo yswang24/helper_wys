@@ -35,13 +35,25 @@ export function App() {
   const answerEndRef = useRef<HTMLDivElement>(null)
   // Shared by wheel/touch scrolling, global-shortcut IPC, and streaming auto-follow. A manual scroll
   // pauses auto-follow synchronously so the next token cannot yank the viewport back to the bottom.
-  const { scrollRef, stickToBottomRef, onAnswerScroll, scrollModeActive } = useAnswerScroll()
+  const {
+    scrollRef,
+    stickToBottomRef,
+    resumeLiveTailRef,
+    onAnswerScroll,
+    scrollModeActive
+  } = useAnswerScroll()
 
   // LLM history + streaming state machine (chunk buffering, RAF flush, id reconciliation).
   const { history } = useStreamingAnswer(stickToBottomRef)
   const isAnswerStreaming =
     history.length > 0 && history[history.length - 1].status === 'streaming'
-  useResumeStreamingAutoFollow(scrollModeActive, isAnswerStreaming, stickToBottomRef)
+  useResumeStreamingAutoFollow(
+    scrollModeActive,
+    isAnswerStreaming,
+    stickToBottomRef,
+    resumeLiveTailRef,
+    answerEndRef
+  )
 
   // ASR display / appearance / mode — overlay only displays; main does the capture & drives mode.
   const { listening, finalLines, clearFinalLines } = useAsrDisplay()
