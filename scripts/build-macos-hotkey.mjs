@@ -6,9 +6,9 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const sourcePath = join(projectRoot, 'native', 'fn-shift-hotkey.c')
+const sourcePath = join(projectRoot, 'native', 'fn-modifier-hotkeys.c')
 const outputDirectory = join(projectRoot, '.native-build')
-const outputPath = join(outputDirectory, 'helper-fn-shift-hotkey')
+const outputPath = join(outputDirectory, 'helper-fn-modifier-hotkeys')
 const architectures = ['arm64', 'x86_64']
 
 async function runXcrun(args) {
