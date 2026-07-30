@@ -36,6 +36,22 @@ describe('useStreamingAnswer', () => {
     expect(result.current.history[0].status).toBe('done')
   })
 
+  it('keeps accumulating chunks while manual review pauses live-tail following', () => {
+    const stickToBottomRef = { current: true }
+    const { result } = renderHook(() => useStreamingAnswer(stickToBottomRef))
+    act(() => h.start({ id: 1, question: 'q' }))
+    stickToBottomRef.current = false
+
+    act(() => h.chunk({ id: 1, chunk: '仍在' }))
+    act(() => h.chunk({ id: 1, chunk: '生成' }))
+
+    expect(stickToBottomRef.current).toBe(false)
+    expect(result.current.history[0]).toMatchObject({
+      answer: '仍在生成',
+      status: 'streaming'
+    })
+  })
+
   it('keeps overlapping streams separate by id', () => {
     const { result } = render()
     act(() => h.start({ id: 1, question: 'q1' }))

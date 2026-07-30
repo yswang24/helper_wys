@@ -5,16 +5,27 @@ import { useAsrDisplay } from './hooks/useAsrDisplay'
 import { useAnswerScroll } from './hooks/useAnswerScroll'
 import { useOverlayOpacity } from './hooks/useOverlayOpacity'
 import { useOverlayMode } from './hooks/useOverlayMode'
+import { useResumeStreamingAutoFollow } from './hooks/useResumeStreamingAutoFollow'
 
-export function AnswerScrollModeBadge({ active }: { active: boolean }) {
+export function AnswerScrollModeBadge({
+  active,
+  streaming = false
+}: {
+  active: boolean
+  streaming?: boolean
+}) {
   if (!active) return null
   return (
     <span
       className="text-xs"
       style={{ color: '#38bdf8' }}
-      title="回答滚动模式已开启：方向键由 Helper 接管，30 秒无操作后自动关闭"
+      title={
+        streaming
+          ? '正在回看较早内容，模型仍在继续生成；退出滚动模式后会恢复追到最新内容。'
+          : '回答滚动模式已开启：方向键由 Helper 接管，30 秒无操作后自动关闭'
+      }
     >
-      ↕ 回答滚动
+      {streaming ? '↕ 回看中 · 生成继续' : '↕ 回答滚动'}
     </span>
   )
 }
@@ -28,6 +39,9 @@ export function App() {
 
   // LLM history + streaming state machine (chunk buffering, RAF flush, id reconciliation).
   const { history } = useStreamingAnswer(stickToBottomRef)
+  const isAnswerStreaming =
+    history.length > 0 && history[history.length - 1].status === 'streaming'
+  useResumeStreamingAutoFollow(scrollModeActive, isAnswerStreaming, stickToBottomRef)
 
   // ASR display / appearance / mode — overlay only displays; main does the capture & drives mode.
   const { listening, finalLines, clearFinalLines } = useAsrDisplay()
@@ -203,7 +217,7 @@ export function App() {
               ● 监听中
             </span>
           )}
-          <AnswerScrollModeBadge active={scrollModeActive} />
+          <AnswerScrollModeBadge active={scrollModeActive} streaming={isAnswerStreaming} />
           <div className="ml-auto flex items-center gap-2">
             {/* Mode badge — 纯指示当前模式,不可点。切换只走 ⌘⌥E / 托盘:点击切换会激活本 app、
                 毛玻璃背景重绘导致"跳一下"。pointerEvents:none 保证它永远不参与鼠标命中。 */}

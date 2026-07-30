@@ -16,7 +16,7 @@ export function isAnswerAtBottom(element: ScrollElement): boolean {
 }
 
 /**
- * Moves one reading "page", retaining 20% of the previous viewport for visual context.
+ * Moves one reading "page", retaining 40% of the previous viewport for visual context.
  *
  * Auto-follow is paused synchronously before the smooth animation begins. This prevents the next
  * streaming token from snapping the answer back to the bottom before the first scroll event fires.
