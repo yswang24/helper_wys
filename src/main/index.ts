@@ -25,14 +25,18 @@ import {
   createOverlayAnswerScrollDispatcher,
   createOverlayAnswerScrollModeDispatcher
 } from './overlay-answer-scroll'
+import {
+  OVERLAY_MODE_SHORTCUT_LABEL,
+  registerOverlayModeShortcut
+} from './overlay-mode-shortcut'
 import { WindowManager } from './window-manager'
 
 const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
 const fnModifierHotkeys = new FnModifierHotkeys()
 
-// WindowManager owns the main/selector windows + tray; OverlayController owns the stealth overlay.
-// They reference each other lazily (tray reads overlay state; overlay crash-rebuild reads
-// isQuitting), so the closures below are only invoked at runtime — no construction-order cycle.
+// WindowManager owns the main/selector windows + platform menu; OverlayController owns the stealth
+// overlay. They reference each other lazily (the menu reads overlay state; overlay crash-rebuild
+// reads isQuitting), so the closures below are only invoked at runtime — no construction-order cycle.
 const windowManager: WindowManager = new WindowManager({
   hardenWebContents,
   setMainWindow,
@@ -48,7 +52,7 @@ const overlayController: OverlayController = new OverlayController({
   persistConfig,
   hardenWebContents,
   isQuitting: () => windowManager.isQuitting(),
-  onVisibilityChange: () => windowManager.updateTrayMenu()
+  onVisibilityChange: () => windowManager.updateAppMenu()
 })
 const dispatchOverlayAnswerScroll = createOverlayAnswerScrollDispatcher(() =>
   overlayController.getWindow()
@@ -125,7 +129,7 @@ app.whenReady().then(() => {
   // conferencing app force-hides the overlay. Owned by OverlayController.
   overlayController.startHeartbeat()
 
-  windowManager.createTray()
+  windowManager.createAppMenu()
 
   if (process.platform === 'darwin') {
     fnModifierHotkeys.start(
@@ -139,10 +143,19 @@ app.whenReady().then(() => {
       }),
       (reason) => recordShortcutFailure(FN_MODIFIER_SHORTCUT_LABEL, reason)
     )
+
+    registerOverlayModeShortcut({
+      register: (accelerator, handler) =>
+        globalShortcut.register(accelerator, handler),
+      toggleOverlayMode: () =>
+        overlayController.ensureShownAndToggleMode(),
+      onUnavailable: (reason) =>
+        recordShortcutFailure(OVERLAY_MODE_SHORTCUT_LABEL, reason)
+    })
   }
 })
 
-// 任何退出路径（⌘Q、右键 Dock→退出、托盘退出、app.quit()）都先置位。
+// 任何退出路径（⌘Q、右键 Dock→退出、非 macOS 托盘退出、app.quit()）都先置位。
 // 否则 mainWindow 的 close 处理器会 preventDefault 把退出吞掉，进程残留、Dock 图标退不掉。
 app.on('before-quit', () => {
   windowManager.setQuitting(true)

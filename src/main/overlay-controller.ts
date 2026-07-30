@@ -14,7 +14,7 @@ export interface OverlayControllerDeps {
   persistConfig: (cfg: PersistedConfig) => void
   hardenWebContents: (win: BrowserWindow) => void
   isQuitting: () => boolean
-  onVisibilityChange: () => void // → updateTrayMenu
+  onVisibilityChange: () => void // → updateAppMenu
 }
 
 export class OverlayController {
@@ -112,7 +112,10 @@ export class OverlayController {
     overlayWindow.webContents.on('did-finish-load', () => {
       this.rebuildCount = 0
       // show:false → 加载完成后非激活显示(不切屏)。崩溃重建/HMR 后重新落实内容保护 + 穿透态。
-      if (this.userVisible && this.win && !this.win.isVisible()) this.win.showInactive()
+      if (this.userVisible && this.win && !this.win.isVisible()) {
+        this.win.showInactive()
+        this.deps.onVisibilityChange()
+      }
       this.win?.setContentProtection(true)
       if (!this.interactive) this.win?.setIgnoreMouseEvents(true)
     })
@@ -170,7 +173,7 @@ export class OverlayController {
     this.deps.onVisibilityChange()
   }
 
-  // The Fn+Command / tray show-hide item toggles visibility (non-activating), then refreshes the tray.
+  // Fn+Command / app-menu show-hide toggles visibility without activation, then refreshes the menu.
   toggleVisibility(): void {
     if (!this.win) return
     if (this.win.isVisible()) {
@@ -183,7 +186,7 @@ export class OverlayController {
     this.deps.onVisibilityChange()
   }
 
-  // The tray mode item ensures the overlay is shown (non-activating) then flips passthrough/input.
+  // The shortcut/app-menu mode action shows the overlay without activation, then flips its mode.
   ensureShownAndToggleMode(): void {
     if (!this.win) return
     if (!this.win.isVisible()) {
@@ -202,7 +205,7 @@ export class OverlayController {
         this.win.setAlwaysOnTop(true, 'screen-saver')
         this.win.setContentProtection(true) // 恢复后重设内容保护(E28 hide→show 会丢)
         if (!this.interactive) this.win.setIgnoreMouseEvents(true) // 重新落实穿透态
-        this.deps.onVisibilityChange() // visibility changed → refresh the tray label
+        this.deps.onVisibilityChange() // visibility changed → refresh the app-menu label
       }
     }, 100)
   }

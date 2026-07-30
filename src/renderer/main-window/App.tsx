@@ -115,6 +115,7 @@ export function App() {
               滚动模式（再按关闭；↑↓ 由 Helper 接管；30 秒无操作关闭）
             </span>
             <span><kbd className="font-mono">fn⌘</kbd> 覆盖层</span>
+            <span><kbd className="font-mono">⌥⌘X</kbd> 输入/穿透模式</span>
           </>
         )}
       </div>

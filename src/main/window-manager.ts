@@ -1,7 +1,8 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, screen } from 'electron'
 import { join } from 'path'
+import { createOverlayControlMenuTemplate } from './overlay-control-menu'
 
-// The overlay surface the tray menu needs. Injected (lazily) so WindowManager and
+// The overlay surface the app menu needs. Injected (lazily) so WindowManager and
 // OverlayController can reference each other without a construction-order cycle.
 export interface OverlayBridge {
   isVisible: () => boolean
@@ -11,14 +12,14 @@ export interface OverlayBridge {
 }
 
 export interface WindowManagerDeps {
+  platform?: NodeJS.Platform
   hardenWebContents: (win: BrowserWindow) => void
   setMainWindow: (win: BrowserWindow | null) => void
   overlay: OverlayBridge
 }
 
-// Owns the main window, the screenshot selector window, and the tray. Every method is a verbatim
-// move of the former index.ts functions. isQuitting/isCapturing are read by index.ts's app
-// lifecycle handlers (activate/before-quit) so they stay authoritative here.
+// Owns the main window, screenshot selector, and platform menu. isQuitting/isCapturing are read
+// by index.ts's app lifecycle handlers (activate/before-quit) so they stay authoritative here.
 export class WindowManager {
   private mainWindow: BrowserWindow | null = null
   private selectorWindow: BrowserWindow | null = null
@@ -80,7 +81,7 @@ export class WindowManager {
     // Let llm.ts mirror stream lifecycle here so the Ask tab button tracks real progress.
     this.deps.setMainWindow(mainWindow)
 
-    // 点 X → 仅隐藏主窗口,应用继续在托盘后台运行;真正退出走托盘菜单
+    // 点 X → 仅隐藏主窗口，应用继续在后台运行；真正退出走 Dock/托盘菜单或 ⌘Q。
     mainWindow.on('close', (e) => {
       if (!this.quitting) {
         e.preventDefault()
@@ -94,7 +95,8 @@ export class WindowManager {
     })
   }
 
-  // 统一的"把主窗口唤回前台"入口。Dock/托盘点击都走这里,保证 null/已销毁/屏幕外 三种边界都被处理。
+  // 统一的"把主窗口唤回前台"入口。Dock/非 macOS 托盘点击都走这里，保证
+  // null/已销毁/屏幕外三种边界都被处理。
   restoreMainWindow(): void {
     if (!this.mainWindow || this.mainWindow.isDestroyed()) {
       // 窗口已真正销毁,只可能发生在一次没走完的退出之后。重建前清掉退出标记,
@@ -116,39 +118,41 @@ export class WindowManager {
     this.mainWindow.focus()
   }
 
-  createTray(): void {
+  createAppMenu(): void {
+    if ((this.deps.platform ?? process.platform) === 'darwin') {
+      this.updateAppMenu()
+      return
+    }
+
     const iconPath = join(__dirname, '../../resources/icon.png')
     const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
     this.tray = new Tray(trayIcon)
     this.tray.setToolTip('Helper')
-    this.updateTrayMenu()
+    this.updateAppMenu()
     this.tray.on('click', () => this.restoreMainWindow())
   }
 
-  // Rebuild the tray menu so its overlay show/hide + mode labels match current state.
-  updateTrayMenu(): void {
-    if (!this.tray) return
-    const menu = Menu.buildFromTemplate([
-      {
-        label: this.deps.overlay.isVisible() ? '隐藏覆盖层' : '显示覆盖层',
-        click: () => this.deps.overlay.toggleVisibility()
-      },
-      {
-        label: this.deps.overlay.isInteractive()
-          ? '切到穿透模式（不抢焦点）'
-          : '切到输入模式（可打字·会切屏）',
-        click: () => this.deps.overlay.ensureShownAndToggleMode()
-      },
-      { type: 'separator' },
-      {
-        label: '退出',
-        click: () => {
+  // Rebuild the Dock/tray menu so its overlay show/hide + mode labels match current state.
+  updateAppMenu(): void {
+    const menu = Menu.buildFromTemplate(
+      createOverlayControlMenuTemplate({
+        overlayVisible: this.deps.overlay.isVisible(),
+        overlayInteractive: this.deps.overlay.isInteractive(),
+        toggleOverlayVisibility: () => this.deps.overlay.toggleVisibility(),
+        toggleOverlayMode: () => this.deps.overlay.ensureShownAndToggleMode(),
+        quit: () => {
           this.quitting = true
           app.quit()
         }
-      }
-    ])
-    this.tray.setContextMenu(menu)
+      })
+    )
+
+    if ((this.deps.platform ?? process.platform) === 'darwin') {
+      app.dock?.setMenu(menu)
+      return
+    }
+
+    this.tray?.setContextMenu(menu)
   }
 
   // Toggles the region selector.

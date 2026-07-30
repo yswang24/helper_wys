@@ -57,7 +57,9 @@ describe('FnModifierHotkeys', () => {
 
     expect(hotkeys.start(trigger, unavailable)).toBe(true)
     process.stdout.write('con')
-    process.stdout.write('trol\nunknown\nshift\noption\ncommand\n')
+    process.stdout.write(
+      'trol\nunknown\ntab\nunavailable:tab:-9868\nfn-down\nfn-up\nshift\noption\ncommand\n'
+    )
     await vi.waitFor(() => expect(trigger).toHaveBeenCalledTimes(4))
     expect(trigger.mock.calls).toEqual([
       ['control'],
