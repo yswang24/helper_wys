@@ -97,8 +97,8 @@
     "mac": {
       "extraFiles": [
         {
-          "from": ".native-build/helper-fn-shift-hotkey",
-          "to": "Helpers/helper-fn-shift-hotkey"
+          "from": ".native-build/helper-fn-modifier-hotkeys",
+          "to": "Helpers/helper-fn-modifier-hotkeys"
         }
       ],
       "target": [

@@ -151,7 +151,7 @@ export class WindowManager {
     this.tray.setContextMenu(menu)
   }
 
-  // ⌘⌥S: toggle the region selector.
+  // Toggles the region selector.
   toggleSelector(): void {
     if (this.selectorWindow) {
       this.selectorWindow.close()

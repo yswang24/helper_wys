@@ -10,9 +10,9 @@ function cleanTranscript(text: string): string | null {
   return t
 }
 
-// The ⌘⌥X recording state machine, moved verbatim as ONE block from VoiceTab. Deliberately NOT
+// The Fn+Control recording state machine, moved verbatim as ONE block from VoiceTab. Deliberately NOT
 // split further: the five refs + two watchdog timers + toggle guard are a single coordinated
-// machine — pulling any apart re-introduces the "first take works, then ⌘⌥X does nothing" bug.
+// machine — pulling any apart re-introduces the "first take works, then Fn+Control does nothing" bug.
 // Refs stay refs (stale-closure discipline); the only view-owned piece is the draft textarea ref.
 export function useAsrCapture(active: boolean) {
   const [listening, setListening] = useState(false)
@@ -101,7 +101,7 @@ export function useAsrCapture(active: boolean) {
         }
       }
       streamRef.current = stream
-      // Labels only appear post-permission — refresh via ref (this runs from a mount-time ⌘⌥X closure
+      // Labels only appear post-permission — refresh via ref (this runs from a mount-time Fn+Control closure
       // where `devices` would be stale []).
       if (devicesRef.current.some((d) => !d.label)) {
         navigator.mediaDevices
@@ -113,7 +113,7 @@ export function useAsrCapture(active: boolean) {
         ? 'audio/webm;codecs=opus'
         : 'audio/webm'
 
-      // Manual bracketing: one continuous recording from ⌘⌥X-start to ⌘⌥X-stop, transcribed in a
+      // Manual bracketing: one continuous recording from Fn+Control-start to Fn+Control-stop, transcribed in a
       // single pass on stop. The user delimits the utterance — no VAD.
       const chunks: Blob[] = []
       const rec = new MediaRecorder(new MediaStream(stream.getAudioTracks()), { mimeType })
@@ -150,7 +150,7 @@ export function useAsrCapture(active: boolean) {
         try {
           const buf = await blob.arrayBuffer()
           // Backstop watchdog: guarantees the promise settles so the finally clears transcribing even
-          // if the IPC round-trip hangs — otherwise ⌘⌥X stays locked on "转写中…" until an app restart.
+          // if the IPC round-trip hangs — otherwise Fn+Control stays locked on "转写中…" until an app restart.
           let watchdog: ReturnType<typeof setTimeout> | undefined
           const text = await Promise.race([
             window.electronAPI.transcribeChunk(buf, mimeType, currentLang),
@@ -191,7 +191,7 @@ export function useAsrCapture(active: boolean) {
       stream.getTracks().forEach((t) => {
         t.onended = () => {
           if (listeningRef.current) {
-            setError('音频设备已断开（蓝牙耳机？），录音已停止；重连后按 ⌘⌥X 重新开始。')
+            setError('音频设备已断开（蓝牙耳机？），录音已停止；重连后按 fn⌃ 重新开始。')
             stopCapture()
           }
         }
@@ -218,7 +218,7 @@ export function useAsrCapture(active: boolean) {
     if (rec) {
       setTranscribing(true)
       transcribingRef.current = true
-      // Safety net: if onstop NEVER fires, transcribingRef would stay true forever and the ⌘⌥X start
+      // Safety net: if onstop NEVER fires, transcribingRef would stay true forever and the Fn+Control start
       // branch would silently refuse every new take until restart — the "第一次成功、之后没反应" bug.
       // Force-reset after a short grace. (Slow transcription is bounded separately by the 40s watchdog.)
       if (transcribeGuardRef.current) clearTimeout(transcribeGuardRef.current)
@@ -228,7 +228,7 @@ export function useAsrCapture(active: boolean) {
           console.warn('[ASR] onstop 未在预期内触发，强制复位转写状态（本次录音可能未正常结束）')
           transcribingRef.current = false
           setTranscribing(false)
-          setError('转写状态异常，已自动复位，请重新按 ⌘⌥X 录音')
+          setError('转写状态异常，已自动复位，请重新按 fn⌃ 录音')
         }
       }, 8000)
       rec.stop()
@@ -238,13 +238,13 @@ export function useAsrCapture(active: boolean) {
     window.electronAPI.stopListening()
   }
 
-  // Toggle recording: ⌘⌥X once = start, again = stop. listeningRef is the single source of truth;
+  // Toggle recording: Fn+Control once = start, again = stop. listeningRef is the single source of truth;
   // togglingRef guards the async start window so a fast double-press can't spawn two recorders.
   const togglingRef = useRef(false)
   useEffect(() => {
     const un = window.electronAPI.onAsrPttToggle(async () => {
       if (togglingRef.current) {
-        console.warn('[ASR] 忽略 ⌘⌥X：上一次开始/停止切换尚未完成')
+        console.warn('[ASR] 忽略 Fn+Control：上一次开始/停止切换尚未完成')
         return
       }
       togglingRef.current = true
@@ -256,7 +256,7 @@ export function useAsrCapture(active: boolean) {
           // append into the freshly-cleared draft). But NEVER fail silently — tell the user.
           if (transcribingRef.current) {
             console.warn('[ASR] 忽略开始录音：上一段仍在转写中（transcribingRef=true）')
-            setError('上一段还在转写中，请等结果出来再按 ⌘⌥X 录音')
+            setError('上一段还在转写中，请等结果出来再按 fn⌃ 录音')
             return
           }
           setDraftText('')
