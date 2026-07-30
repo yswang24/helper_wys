@@ -4,7 +4,7 @@
 
 **Goal:** Make long code lines in the answer overlay wrap visually to the available width without changing the underlying code text or any unrelated behavior.
 
-**Architecture:** Keep the existing Markdown segmentation and code rendering flow in `AnswerText`. Change only the code block presentation from preserved non-wrapping whitespace plus horizontal scrolling to preserved soft-wrapping whitespace with horizontal overflow hidden, and expose `AnswerText` only so its real rendering behavior can be tested directly.
+**Architecture:** Keep the existing Markdown segmentation and code rendering flow in `AnswerText`. Change only the code block presentation from preserved non-wrapping whitespace plus horizontal scrolling to preserved soft-wrapping whitespace with horizontal overflow hidden. Test the behavior through the already exported overlay `App`, with its data hooks replaced by deterministic local fixtures, so no test-only production interface is added.
 
 **Tech Stack:** React, TypeScript, Tailwind CSS classes, Vitest, Testing Library, jsdom
 
@@ -26,20 +26,71 @@
 - Test: `src/renderer/overlay-window/App.test.tsx`
 
 **Interfaces:**
-- Consumes: `AnswerText({ text, streaming }: { text: string; streaming: boolean })`
-- Produces: An exported `AnswerText` component whose `<pre>` code blocks use `white-space: pre-wrap`, `overflow-wrap: anywhere`, and `overflow-x: hidden` while rendering the original code string unchanged.
+- Consumes: The exported `App` component and its existing `useStreamingAnswer` history input.
+- Produces: Overlay `<pre>` code blocks that use `white-space: pre-wrap`, `overflow-wrap: anywhere`, and `overflow-x: hidden` while rendering the original code string unchanged.
 
 - [ ] **Step 1: Write the failing component test**
 
-Update the import and add this test:
+Mock the overlay hooks with stable local values, make the minimal `window.electronAPI` callbacks available to the real `App`, and add these tests:
 
 ```tsx
-import { AnswerScrollModeBadge, AnswerText } from './App'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { AnswerScrollModeBadge, App } from './App'
 
-describe('AnswerText', () => {
-  it('soft-wraps long code without changing the source text', () => {
-    const code = `const value = '${'x'.repeat(200)}'\n  return value`
-    const { container } = render(<AnswerText text={`\`\`\`\n${code}\n\`\`\``} streaming={false} />)
+const overlayFixture = vi.hoisted(() => ({
+  code: `const value = '${'x'.repeat(200)}'\n  return value`
+}))
+
+vi.mock('./hooks/useStreamingAnswer', () => ({
+  useStreamingAnswer: () => ({
+    history: [
+      {
+        id: 1,
+        question: 'Show code',
+        answer: `\`\`\`\n${overlayFixture.code}\n\`\`\``,
+        status: 'done',
+        errorMsg: ''
+      }
+    ]
+  })
+}))
+
+vi.mock('./hooks/useAnswerScroll', () => ({
+  useAnswerScroll: () => ({
+    scrollRef: { current: null },
+    stickToBottomRef: { current: true },
+    onAnswerScroll: () => undefined,
+    scrollModeActive: false
+  })
+}))
+
+vi.mock('./hooks/useAsrDisplay', () => ({
+  useAsrDisplay: () => ({
+    listening: false,
+    finalLines: [],
+    clearFinalLines: () => undefined
+  })
+}))
+vi.mock('./hooks/useOverlayOpacity', () => ({ useOverlayOpacity: () => 0.94 }))
+vi.mock('./hooks/useOverlayMode', () => ({ useOverlayMode: () => 'passthrough' }))
+
+beforeAll(() => {
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: vi.fn()
+  })
+  Object.assign(window, {
+    electronAPI: {
+      onImageStatus: () => () => undefined,
+      onImageText: () => () => undefined,
+      onImageError: () => () => undefined
+    }
+  })
+})
+
+describe('overlay answer code blocks', () => {
+  it('soft-wraps long lines without horizontal scrolling', () => {
+    const { container } = render(<App />)
     const codeBlock = container.querySelector('pre')
 
     expect(codeBlock).not.toBeNull()
@@ -48,7 +99,11 @@ describe('AnswerText', () => {
       overflowWrap: 'anywhere',
       overflowX: 'hidden'
     })
-    expect(codeBlock?.textContent).toBe(code)
+  })
+
+  it('keeps the source code text unchanged', () => {
+    const { container } = render(<App />)
+    expect(container.querySelector('pre')?.textContent).toBe(overlayFixture.code)
   })
 })
 ```
@@ -61,21 +116,9 @@ Run:
 npm test -- src/renderer/overlay-window/App.test.tsx
 ```
 
-Expected: FAIL because `AnswerText` is not exported and/or because the current code block still uses non-wrapping `white-space: pre` with horizontal scrolling.
+Expected: the source-text preservation assertion passes, while the soft-wrap test fails because the current code block still uses non-wrapping `white-space: pre` with horizontal scrolling.
 
 - [ ] **Step 3: Implement the minimal presentation change**
-
-In `src/renderer/overlay-window/App.tsx`:
-
-```tsx
-export const AnswerText = memo(function AnswerText({
-  text,
-  streaming
-}: {
-  text: string
-  streaming: boolean
-}) {
-```
 
 For the existing `<pre>` code block:
 
