@@ -633,13 +633,15 @@ const AnswerText = memo(function AnswerText({ text, streaming }: { text: string;
           return (
             <pre
               key={i}
-              className="rounded-lg p-3 overflow-x-auto text-xs"
+              className="rounded-lg p-3 text-xs"
               style={{
                 background: 'rgba(20, 20, 40, 0.8)',
                 border: '1px solid rgba(60, 60, 100, 0.5)',
                 color: '#7dd3fc',
                 fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
-                whiteSpace: 'pre'
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+                overflowX: 'hidden'
               }}
             >
               {seg.lang && (

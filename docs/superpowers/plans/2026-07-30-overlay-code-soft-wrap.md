@@ -38,7 +38,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { AnswerScrollModeBadge, App } from './App'
 
 const overlayFixture = vi.hoisted(() => ({
-  code: `const value = '${'x'.repeat(200)}'\n  return value`
+  code: `const value = '${'x'.repeat(200)}'\n  return value\n`
 }))
 
 vi.mock('./hooks/useStreamingAnswer', () => ({
@@ -47,7 +47,7 @@ vi.mock('./hooks/useStreamingAnswer', () => ({
       {
         id: 1,
         question: 'Show code',
-        answer: `\`\`\`\n${overlayFixture.code}\n\`\`\``,
+        answer: `\`\`\`\n${overlayFixture.code}\`\`\``,
         status: 'done',
         errorMsg: ''
       }
