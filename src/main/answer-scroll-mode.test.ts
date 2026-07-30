@@ -97,7 +97,7 @@ describe('AnswerScrollMode', () => {
     expect(harness.broadcast).toHaveBeenLastCalledWith(false)
   })
 
-  it('uses either command shortcut as a close toggle without performing another scroll', () => {
+  it('uses a second toggle invocation to close without performing another scroll', () => {
     const harness = createHarness()
     harness.controller.toggle()
     harness.dispatch.mockClear()

@@ -170,7 +170,7 @@ export class OverlayController {
     this.deps.onVisibilityChange()
   }
 
-  // ⌘⌥H / tray show-hide item: toggle visibility (non-activating), then refresh the tray.
+  // The Fn+Command / tray show-hide item toggles visibility (non-activating), then refreshes the tray.
   toggleVisibility(): void {
     if (!this.win) return
     if (this.win.isVisible()) {
@@ -183,7 +183,7 @@ export class OverlayController {
     this.deps.onVisibilityChange()
   }
 
-  // ⌘⌥E / tray mode item: ensure shown (non-activating) then flip passthrough/input.
+  // The tray mode item ensures the overlay is shown (non-activating) then flips passthrough/input.
   ensureShownAndToggleMode(): void {
     if (!this.win) return
     if (!this.win.isVisible()) {

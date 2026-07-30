@@ -7,7 +7,11 @@ import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, force
 import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 import { createFullScreenCaptureTrigger, registerScreenshotIpc } from './screenshot'
-import { FN_SHIFT_SHORTCUT_LABEL, FnShiftHotkey } from './fn-shift-hotkey'
+import {
+  FN_MODIFIER_SHORTCUT_LABEL,
+  FnModifierHotkeys
+} from './fn-modifier-hotkeys'
+import { createFnModifierShortcutDispatcher } from './fn-modifier-shortcut-actions'
 import { registerConfigIpc } from './config'
 import { createStreamSafe } from './stream-safe'
 import { registerAppIpc } from './ipc/app'
@@ -16,10 +20,7 @@ import { registerLlmIpc } from './ipc/llm'
 import { registerAsrIpc } from './ipc/asr'
 import { registerOverlayIpc } from './ipc/overlay'
 import { OverlayController } from './overlay-controller'
-import {
-  ANSWER_SCROLL_MODE_SHORTCUTS,
-  createAnswerScrollMode
-} from './answer-scroll-mode'
+import { createAnswerScrollMode } from './answer-scroll-mode'
 import {
   createOverlayAnswerScrollDispatcher,
   createOverlayAnswerScrollModeDispatcher
@@ -27,7 +28,7 @@ import {
 import { WindowManager } from './window-manager'
 
 const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
-const fnShiftHotkey = new FnShiftHotkey()
+const fnModifierHotkeys = new FnModifierHotkeys()
 
 // WindowManager owns the main/selector windows + tray; OverlayController owns the stealth overlay.
 // They reference each other lazily (tray reads overlay state; overlay crash-rebuild reads
@@ -126,27 +127,17 @@ app.whenReady().then(() => {
 
   windowManager.createTray()
 
-  registerShortcut('CommandOrControl+Alt+H', () => overlayController.toggleVisibility())
-
-  // 切换悬浮窗 穿透/输入 模式。穿透模式下悬浮窗收不到键盘,故切换必须走全局快捷键(或托盘)。
-  registerShortcut('CommandOrControl+Alt+E', () => overlayController.ensureShownAndToggleMode())
-
-  // Toggle ASR: ⌘⌥X starts/stops recording. The renderer (VoiceTab) is the single
-  // source of truth for "am I recording" — we just nudge it to flip. A main-side
-  // boolean would drift out of sync whenever capture stops on its own (device
-  // unplugged, failed start), inverting start/stop and misaligning the recorded clip.
-  registerShortcut('CommandOrControl+Alt+X', () => {
-    windowManager.getMainWindow()?.webContents.send('asr:ptt-toggle')
-  })
-
-  // Activate region selector for coding screenshot
-  registerShortcut('CommandOrControl+Alt+S', () => windowManager.toggleSelector())
-
   if (process.platform === 'darwin') {
-    registerShortcut(ANSWER_SCROLL_MODE_SHORTCUTS.toggleUp, () => answerScrollMode.toggle('up'))
-    registerShortcut(ANSWER_SCROLL_MODE_SHORTCUTS.toggleDown, () => answerScrollMode.toggle('down'))
-    fnShiftHotkey.start(triggerFullScreenScreenshot, (reason) =>
-      recordShortcutFailure(FN_SHIFT_SHORTCUT_LABEL, reason)
+    fnModifierHotkeys.start(
+      createFnModifierShortcutDispatcher({
+        toggleRecording: () => {
+          windowManager.getMainWindow()?.webContents.send('asr:ptt-toggle')
+        },
+        captureFullScreen: triggerFullScreenScreenshot,
+        toggleAnswerScrollMode: () => answerScrollMode.toggle(),
+        toggleOverlayVisibility: () => overlayController.toggleVisibility()
+      }),
+      (reason) => recordShortcutFailure(FN_MODIFIER_SHORTCUT_LABEL, reason)
     )
   }
 })
@@ -156,7 +147,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   windowManager.setQuitting(true)
   answerScrollMode.deactivate()
-  fnShiftHotkey.stop()
+  fnModifierHotkeys.stop()
 })
 
 // macOS：点击程序坞图标会触发 'activate'。主窗口被 X 关闭后只是隐藏（见 close 处理器），
@@ -173,7 +164,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   overlayController.stopHeartbeat()
   answerScrollMode.deactivate()
-  fnShiftHotkey.stop()
+  fnModifierHotkeys.stop()
   globalShortcut.unregisterAll()
 })
 

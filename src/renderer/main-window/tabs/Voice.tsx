@@ -35,7 +35,7 @@ export function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettin
 
       {/* System-audio guidance */}
       <div className="rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#7dd3fc' }}>
-        💡 想让 AI 听到<strong>对方的声音</strong>：装 BlackHole 虚拟声卡 → 在「音频 MIDI 设置」建一个含 BlackHole 的「多输出设备」并设为系统输出 → 下面选 BlackHole。仅选麦克风只会录到你自己。按 ⌘⌥X 开始/停止。
+        💡 想让 AI 听到<strong>对方的声音</strong>：装 BlackHole 虚拟声卡 → 在「音频 MIDI 设置」建一个含 BlackHole 的「多输出设备」并设为系统输出 → 下面选 BlackHole。仅选麦克风只会录到你自己。按 fn⌃ 开始/停止。
         <br />🎧 <strong>用蓝牙耳机</strong>：把耳机也加进上面的「多输出设备」（照常从耳机听），并设非蓝牙设备为主、给蓝牙开「漂移校正」。采集仍选 <strong>BlackHole</strong>，<strong>别选蓝牙耳机的麦克风</strong>。
       </div>
 
@@ -105,7 +105,7 @@ export function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettin
           border: `1px solid ${listening ? 'rgba(220,38,38,0.4)' : '#1e1e2e'}`,
         }}
       >
-        {transcribing ? '⏳ 转写中…' : listening ? '● 录音中... 按 ⌘⌥X 停止' : '按 ⌘⌥X 开始录音'}
+        {transcribing ? '⏳ 转写中…' : listening ? '● 录音中... 按 fn⌃ 停止' : '按 fn⌃ 开始录音'}
       </div>
 
       {/* Editable draft area */}
@@ -131,7 +131,7 @@ export function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettin
           value={draftText}
           onChange={(e) => setDraftText(e.target.value)}
           readOnly={listening}
-          placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 ⌘⌥X 录音，转写结果将出现在这里...'}
+          placeholder={transcribing ? '转写中…' : listening ? '录音中…停止后转写结果将出现在这里' : '按 fn⌃ 录音，转写结果将出现在这里...'}
           className="flex-1 rounded-lg p-3 text-xs leading-relaxed resize-none outline-none"
           style={{
             background: '#0a0a12',
@@ -159,4 +159,3 @@ export function VoiceTab({ active, onGoSettings }: { active: boolean; onGoSettin
     </div>
   )
 }
-

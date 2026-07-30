@@ -37,7 +37,7 @@ export async function transcribeAudio(
 
   // maxRetries: 1 (not the SDK default 2) — bound how long a flaky/rate-limited backend can stall
   // the whole voice pipeline. Combined with the 30s AbortSignal below, a stuck transcription can
-  // never hang the "转写中…" UI (and lock ⌘⌥X) for the SDK's default 3×10-minute worst case.
+  // never hang the "转写中…" UI (and lock recording) for the SDK's default 3×10-minute worst case.
   const client = getOpenAIClient({ apiKey: config.apiKey, baseURL: config.baseUrl, maxRetries: 1 })
 
   const ext = mimeType.includes('webm') ? 'webm'

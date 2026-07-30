@@ -17,7 +17,7 @@ async function runXcrun(args) {
 
 async function main() {
   if (process.platform !== 'darwin') {
-    console.log('[native] Skipping Fn+Shift hotkey helper build outside macOS')
+    console.log('[native] Skipping Fn modifier hotkey helper build outside macOS')
     return
   }
 
