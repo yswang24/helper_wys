@@ -29,6 +29,10 @@ import {
   OVERLAY_MODE_SHORTCUT_LABEL,
   registerOverlayModeShortcut
 } from './overlay-mode-shortcut'
+import {
+  REGION_SCREENSHOT_SHORTCUT_LABEL,
+  registerRegionScreenshotShortcut
+} from './region-screenshot-shortcut'
 import { WindowManager } from './window-manager'
 
 const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
@@ -151,6 +155,14 @@ app.whenReady().then(() => {
         overlayController.ensureShownAndToggleMode(),
       onUnavailable: (reason) =>
         recordShortcutFailure(OVERLAY_MODE_SHORTCUT_LABEL, reason)
+    })
+
+    registerRegionScreenshotShortcut({
+      register: (accelerator, handler) =>
+        globalShortcut.register(accelerator, handler),
+      toggleSelector: () => windowManager.toggleSelector(),
+      onUnavailable: (reason) =>
+        recordShortcutFailure(REGION_SCREENSHOT_SHORTCUT_LABEL, reason)
     })
   }
 })

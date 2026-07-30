@@ -116,6 +116,7 @@ export function App() {
             </span>
             <span><kbd className="font-mono">fn⌘</kbd> 覆盖层</span>
             <span><kbd className="font-mono">⌥⌘X</kbd> 输入/穿透模式</span>
+            <span><kbd className="font-mono">⌥⌘Z</kbd> 局部截图</span>
           </>
         )}
       </div>
