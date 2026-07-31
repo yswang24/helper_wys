@@ -34,7 +34,10 @@ function makeFake() {
     setIgnoreMouseEvents: vi.fn(push('setIgnoreMouseEvents')),
     setContentProtection: vi.fn(push('setContentProtection')),
     setAlwaysOnTop: vi.fn(push('setAlwaysOnTop')),
-    showInactive: vi.fn(push('showInactive')),
+    showInactive: vi.fn(() => {
+      order.push('showInactive')
+      visible = true
+    }),
     hide: vi.fn(push('hide')),
     show: vi.fn(push('show')),
     focus: vi.fn(push('focus')),
@@ -126,5 +129,19 @@ describe('OverlayController.ensureVisible', () => {
     expect(order).toContain('setAlwaysOnTop')
     expect(order).not.toContain('show')
     expect(onVisibilityChange).toHaveBeenCalled()
+  })
+})
+
+describe('OverlayController initial load', () => {
+  it('refreshes the app menu after the initially hidden overlay becomes visible', () => {
+    visible = false
+    const { c, onVisibilityChange } = makeController()
+    onVisibilityChange.mockClear()
+
+    wcEvents.get('did-finish-load')?.()
+
+    expect(order).toContain('showInactive')
+    expect(c.isVisible()).toBe(true)
+    expect(onVisibilityChange).toHaveBeenCalledOnce()
   })
 })

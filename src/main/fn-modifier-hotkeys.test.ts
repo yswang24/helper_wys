@@ -2,7 +2,10 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
-import { FnShiftHotkey, resolveFnShiftHotkeyExecutablePath } from './fn-shift-hotkey'
+import {
+  FnModifierHotkeys,
+  resolveFnModifierHotkeysExecutablePath
+} from './fn-modifier-hotkeys'
 
 function fakeChildProcess(): {
   child: ChildProcess
@@ -23,43 +26,51 @@ function fakeChildProcess(): {
   return { child, stdout, stderr, kill }
 }
 
-describe('FnShiftHotkey', () => {
+describe('FnModifierHotkeys', () => {
   it('resolves development and packaged helper locations outside ASAR', () => {
     expect(
-      resolveFnShiftHotkeyExecutablePath({
+      resolveFnModifierHotkeysExecutablePath({
         isPackaged: false,
         resourcesPath: '/unused',
         appPath: '/repo'
       })
-    ).toBe('/repo/.native-build/helper-fn-shift-hotkey')
+    ).toBe('/repo/.native-build/helper-fn-modifier-hotkeys')
     expect(
-      resolveFnShiftHotkeyExecutablePath({
+      resolveFnModifierHotkeysExecutablePath({
         isPackaged: true,
         resourcesPath: '/Applications/Helper.app/Contents/Resources',
         appPath: '/Applications/Helper.app/Contents/Resources/app.asar'
       })
-    ).toBe('/Applications/Helper.app/Contents/Helpers/helper-fn-shift-hotkey')
+    ).toBe('/Applications/Helper.app/Contents/Helpers/helper-fn-modifier-hotkeys')
   })
 
-  it('parses complete and split trigger lines without accepting other output', async () => {
+  it('parses complete and split shortcut lines without accepting other output', async () => {
     const process = fakeChildProcess()
     const trigger = vi.fn()
     const unavailable = vi.fn()
     const spawnProcess = vi.fn(() => process.child)
-    const hotkey = new FnShiftHotkey({
-      resolveExecutable: () => '/tmp/helper-fn-shift-hotkey',
+    const hotkeys = new FnModifierHotkeys({
+      resolveExecutable: () => '/tmp/helper-fn-modifier-hotkeys',
       verifyExecutable: vi.fn(),
       spawnProcess
     })
 
-    expect(hotkey.start(trigger, unavailable)).toBe(true)
-    process.stdout.write('trig')
-    process.stdout.write('ger\nignored\ntrigger\n')
-    await vi.waitFor(() => expect(trigger).toHaveBeenCalledTimes(2))
+    expect(hotkeys.start(trigger, unavailable)).toBe(true)
+    process.stdout.write('con')
+    process.stdout.write(
+      'trol\nunknown\ntab\nunavailable:tab:-9868\nfn-down\nfn-up\nshift\noption\ncommand\n'
+    )
+    await vi.waitFor(() => expect(trigger).toHaveBeenCalledTimes(4))
+    expect(trigger.mock.calls).toEqual([
+      ['control'],
+      ['shift'],
+      ['option'],
+      ['command']
+    ])
 
     expect(spawnProcess).toHaveBeenCalledOnce()
     expect(unavailable).not.toHaveBeenCalled()
-    hotkey.stop()
+    hotkeys.stop()
     expect(process.kill).toHaveBeenCalledOnce()
   })
 
@@ -67,25 +78,25 @@ describe('FnShiftHotkey', () => {
     const process = fakeChildProcess()
     const unavailable = vi.fn()
     const spawnProcess = vi.fn(() => process.child)
-    const hotkey = new FnShiftHotkey({
-      resolveExecutable: () => '/tmp/helper-fn-shift-hotkey',
+    const hotkeys = new FnModifierHotkeys({
+      resolveExecutable: () => '/tmp/helper-fn-modifier-hotkeys',
       verifyExecutable: vi.fn(),
       spawnProcess
     })
 
-    expect(hotkey.start(vi.fn(), unavailable)).toBe(true)
-    expect(hotkey.start(vi.fn(), unavailable)).toBe(true)
+    expect(hotkeys.start(vi.fn(), unavailable)).toBe(true)
+    expect(hotkeys.start(vi.fn(), unavailable)).toBe(true)
     expect(spawnProcess).toHaveBeenCalledOnce()
 
-    hotkey.stop()
+    hotkeys.stop()
     process.child.emit('exit', null, 'SIGTERM')
-    hotkey.stop()
+    hotkeys.stop()
     expect(process.kill).toHaveBeenCalledOnce()
     expect(unavailable).not.toHaveBeenCalled()
   })
 
   it('surfaces a missing executable and an unexpected helper exit', () => {
-    const missing = new FnShiftHotkey({
+    const missing = new FnModifierHotkeys({
       resolveExecutable: () => '/missing/helper',
       verifyExecutable: () => {
         throw new Error('missing')
@@ -97,8 +108,8 @@ describe('FnShiftHotkey', () => {
 
     const process = fakeChildProcess()
     const exitFailure = vi.fn()
-    const running = new FnShiftHotkey({
-      resolveExecutable: () => '/tmp/helper-fn-shift-hotkey',
+    const running = new FnModifierHotkeys({
+      resolveExecutable: () => '/tmp/helper-fn-modifier-hotkeys',
       verifyExecutable: vi.fn(),
       spawnProcess: () => process.child
     })

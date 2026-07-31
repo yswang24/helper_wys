@@ -48,9 +48,19 @@ describe('main-window App', () => {
     await waitFor(() => expect(screen.getByText('手动输入问题')).toBeInTheDocument()) // Ask
     expect(screen.getByText('默认输入设备（麦克风）')).toBeInTheDocument() // Voice
     expect(screen.getByText('API Key')).toBeInTheDocument() // Settings
-    expect(await screen.findByText('fn⇧')).toBeInTheDocument()
-    expect(screen.getByText('⌘⌥↑ / ⌘⌥↓')).toBeInTheDocument()
+    expect(await screen.findByText('fn⌃')).toBeInTheDocument()
+    expect(screen.getByText('fn⇧')).toBeInTheDocument()
+    expect(screen.getByText('fn⌥')).toBeInTheDocument()
+    expect(screen.getByText('fn⌘')).toBeInTheDocument()
+    expect(screen.getByText('⌥⌘X')).toBeInTheDocument()
+    expect(screen.getByText('输入/穿透模式')).toBeInTheDocument()
+    expect(screen.getByText('⌥⌘Z')).toBeInTheDocument()
+    expect(screen.getByText(/局部截图/)).toBeInTheDocument()
+    expect(screen.queryByText('fn+Tab')).not.toBeInTheDocument()
     expect(screen.getByText(/滚动模式（再按关闭/)).toBeInTheDocument()
+    expect(screen.queryByText('⌘⌥H')).not.toBeInTheDocument()
+    expect(screen.queryByText('⌘⌥S')).not.toBeInTheDocument()
+    expect(screen.queryByText('⌘⌥↑ / ⌘⌥↓')).not.toBeInTheDocument()
   })
 
   it('does not advertise macOS-only shortcuts on other platforms', async () => {
@@ -58,8 +68,14 @@ describe('main-window App', () => {
     render(<App />)
 
     await waitFor(() => expect(screen.getByText('手动输入问题')).toBeInTheDocument())
+    expect(screen.queryByText('fn⌃')).not.toBeInTheDocument()
     expect(screen.queryByText('fn⇧')).not.toBeInTheDocument()
-    expect(screen.queryByText('⌘⌥↑ / ⌘⌥↓')).not.toBeInTheDocument()
+    expect(screen.queryByText('fn⌥')).not.toBeInTheDocument()
+    expect(screen.queryByText('fn⌘')).not.toBeInTheDocument()
+    expect(screen.queryByText('⌥⌘X')).not.toBeInTheDocument()
+    expect(screen.queryByText('输入/穿透模式')).not.toBeInTheDocument()
+    expect(screen.queryByText('⌥⌘Z')).not.toBeInTheDocument()
+    expect(screen.queryByText(/局部截图/)).not.toBeInTheDocument()
     expect(screen.queryByText(/滚动模式（再按关闭/)).not.toBeInTheDocument()
   })
 })

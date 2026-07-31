@@ -1,8 +1,6 @@
 import type { AnswerScrollDirection } from '../shared/ipc'
 
 export const ANSWER_SCROLL_MODE_SHORTCUTS = {
-  toggleUp: 'Command+Alt+Up',
-  toggleDown: 'Command+Alt+Down',
   plainUp: 'Up',
   plainDown: 'Down'
 } as const
@@ -21,7 +19,7 @@ export interface AnswerScrollModeDeps {
 }
 
 export interface AnswerScrollMode {
-  toggle: (direction: AnswerScrollDirection) => void
+  toggle: () => void
   deactivate: () => void
   isActive: () => boolean
 }
@@ -120,27 +118,20 @@ export function createAnswerScrollMode(deps: AnswerScrollModeDeps): AnswerScroll
     }
   }
 
-  const toggle = (direction: AnswerScrollDirection): void => {
+  const toggle = (): void => {
     if (active) {
       deactivate()
       return
     }
 
-    if (!registerPlainArrows()) {
-      deps.dispatch(direction)
-      return
-    }
+    if (!registerPlainArrows()) return
 
     active = true
     // Arm cleanup before calling renderer-facing dependencies. Even if an IPC send unexpectedly
     // throws, the globally captured bare arrows cannot remain registered indefinitely.
     resetTimeout()
-    if (!active) {
-      deps.dispatch(direction)
-      return
-    }
+    if (!active) return
     deps.broadcast(true)
-    deps.dispatch(direction)
   }
 
   return {
