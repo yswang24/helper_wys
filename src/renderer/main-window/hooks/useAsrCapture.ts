@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { isHallucinatedText } from '../../../shared/hallucination'
+import { prepareRecordedAudioForAsr } from './audioEncoding'
 
 // Filter a raw transcript: drop empties, <2 chars, and Whisper hallucinations. Returns the cleaned
 // text, or null if it should be discarded.
@@ -93,7 +94,12 @@ export function useAsrCapture(active: boolean) {
       } catch (e) {
         // Selected device unavailable (e.g. Bluetooth headset just disconnected) → fall back to default
         const name = (e as { name?: string })?.name || ''
-        if (id && (name === 'OverconstrainedError' || name === 'NotFoundError' || name === 'NotReadableError')) {
+        if (
+          id &&
+          (name === 'OverconstrainedError' ||
+            name === 'NotFoundError' ||
+            name === 'NotReadableError')
+        ) {
           setError('所选音频设备不可用（蓝牙耳机断开？），已临时改用默认输入设备')
           stream = await navigator.mediaDevices.getUserMedia({ audio: true })
         } else {
@@ -148,14 +154,21 @@ export function useAsrCapture(active: boolean) {
           )
         }
         try {
-          const buf = await blob.arrayBuffer()
+          const preparedAudio = await prepareRecordedAudioForAsr(blob)
           // Backstop watchdog: guarantees the promise settles so the finally clears transcribing even
           // if the IPC round-trip hangs — otherwise ⌘⌥X stays locked on "转写中…" until an app restart.
           let watchdog: ReturnType<typeof setTimeout> | undefined
           const text = await Promise.race([
-            window.electronAPI.transcribeChunk(buf, mimeType, currentLang),
+            window.electronAPI.transcribeChunk(
+              preparedAudio.buffer,
+              preparedAudio.mimeType,
+              currentLang
+            ),
             new Promise<string>((_, reject) => {
-              watchdog = setTimeout(() => reject(new Error('转写超时（40 秒无响应），请重试')), 40000)
+              watchdog = setTimeout(
+                () => reject(new Error('转写超时（40 秒无响应），请重试')),
+                40000
+              )
             })
           ]).finally(() => {
             if (watchdog) clearTimeout(watchdog)
