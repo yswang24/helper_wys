@@ -15,6 +15,8 @@ describe('config unification', () => {
       apiKey: '',
       baseUrl: 'https://api.deepseek.com',
       model: 'deepseek-chat',
+      visionApiKey: '',
+      visionBaseUrl: 'https://api.deepseek.com',
       visionModel: 'deepseek-chat',
       asrApiKey: '',
       asrBaseUrl: 'https://api.openai.com/v1',
@@ -30,7 +32,8 @@ describe('config unification', () => {
 
   it('toPersisted/fromPersisted round-trips the renderer-visible subset', () => {
     const cfg: AppConfig = {
-      provider: { apiKey: 'sk', baseUrl: 'https://api.x', model: 'm', visionModel: 'vm' },
+      provider: { apiKey: 'sk', baseUrl: 'https://api.x', model: 'm' },
+      vision: { apiKey: 'vk', baseUrl: 'https://vision.x', model: 'vm' },
       asr: { apiKey: 'ak', baseUrl: 'https://asr.x', model: 'whisper-large' },
       prompt: { jobDescription: 'JD', resume: 'CV', answerLang: 'en', screenshotPrompt: 'SP' },
       ui: { overlayOpacity: 0.5, screenshotMode: 'ocr' }
@@ -44,6 +47,8 @@ describe('config unification', () => {
     expect(flat.asrApiKey).toBe('ak')
     expect(flat.asrBaseUrl).toBe('https://asr.x')
     expect(flat.asrModel).toBe('whisper-large')
+    expect(flat.visionApiKey).toBe('vk')
+    expect(flat.visionBaseUrl).toBe('https://vision.x')
   })
 
   it('fromPersisted preserves an out-of-range answerLang without throwing', () => {
@@ -51,6 +56,19 @@ describe('config unification', () => {
     expect(cfg.prompt.answerLang).toBe('garbage')
     // Absent fields fall back to defaults.
     expect(cfg.provider.baseUrl).toBe('https://api.deepseek.com')
+  })
+
+  it('migrates legacy shared text credentials into the independent vision config', () => {
+    const cfg = fromPersisted({
+      apiKey: 'legacy-key',
+      baseUrl: 'https://legacy.example/v1',
+      visionModel: 'legacy-vision'
+    })
+    expect(cfg.vision).toEqual({
+      apiKey: 'legacy-key',
+      baseUrl: 'https://legacy.example/v1',
+      model: 'legacy-vision'
+    })
   })
 
   it('toPublicConfig exposes only overlayOpacity + screenshotMode (no secrets)', () => {

@@ -1,30 +1,16 @@
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, existsSync, renameSync, copyFileSync } from 'fs'
-
-interface PersistedConfig {
-  apiKey?: string
-  baseUrl?: string
-  model?: string
-  visionModel?: string
-  // 岗位 JD 与候选人简历要点 — 面试往往跨多次启动准备，必须跨会话保留；非密钥，明文即可。
-  jobDescription?: string
-  resume?: string
-  // 回答语言：'zh' / 'en' / 'auto'（跟随提问）
-  answerLang?: string
-  asrApiKey?: string
-  asrBaseUrl?: string
-  asrModel?: string
-  overlayX?: number
-  overlayY?: number
-  overlayOpacity?: number
-  screenshotMode?: 'direct' | 'ocr'
-  screenshotPrompt?: string
-}
+import type { PersistedConfig, ProviderProfile } from '../shared/config'
 
 // Secrets encrypted at rest via the OS keychain (macOS Keychain) using Electron safeStorage.
 // All other fields stay plaintext. Legacy plaintext secrets are auto-migrated on next save.
-const SECRET_FIELDS: (keyof PersistedConfig)[] = ['apiKey', 'asrApiKey']
+const SECRET_FIELDS: (keyof PersistedConfig)[] = ['apiKey', 'visionApiKey', 'asrApiKey']
+const PROFILE_FIELDS = [
+  'llmProviderProfiles',
+  'visionProviderProfiles',
+  'asrProviderProfiles'
+] as const satisfies readonly (keyof PersistedConfig)[]
 const ENC_PREFIX = 'enc:v1:'
 
 // Sentinel distinguishing "decrypt failed" (keychain transiently locked/unavailable) from
@@ -104,7 +90,41 @@ export function loadPersistedConfig(): PersistedConfig {
       }
     }
   }
+  for (const field of PROFILE_FIELDS) {
+    const stored = raw[field]
+    if (typeof stored === 'string') {
+      const decrypted = decryptValue(stored)
+      if (decrypted === DECRYPT_FAILED) {
+        delete raw[field]
+        continue
+      }
+      try {
+        const parsed = JSON.parse(decrypted) as unknown
+        if (isProviderProfileArray(parsed)) raw[field] = parsed
+        else delete raw[field]
+      } catch {
+        delete raw[field]
+      }
+    } else if (stored !== undefined && !isProviderProfileArray(stored)) {
+      delete raw[field]
+    }
+  }
   return raw as PersistedConfig
+}
+
+function isProviderProfileArray(value: unknown): value is ProviderProfile[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 16 &&
+    value.every(
+      (profile) =>
+        !!profile &&
+        typeof profile === 'object' &&
+        typeof (profile as ProviderProfile).apiKey === 'string' &&
+        typeof (profile as ProviderProfile).baseUrl === 'string' &&
+        typeof (profile as ProviderProfile).model === 'string'
+    )
+  )
 }
 
 // Atomic write: write to a temp file, snapshot the previous good file as .bak, then rename
@@ -114,13 +134,16 @@ function writeFileAtomic(file: string, data: string): void {
   writeFileSync(tmp, data, 'utf-8')
   try {
     if (existsSync(file)) copyFileSync(file, `${file}.bak`)
-  } catch { /* best-effort backup */ }
+  } catch {
+    /* best-effort backup */
+  }
   renameSync(tmp, file)
 }
 
 export function persistConfig(config: PersistedConfig): void {
   try {
     const out: PersistedConfig = { ...config }
+    const outRecord = out as Record<string, unknown>
     // What's currently on disk — used to preserve secrets the caller didn't supply (e.g. a key
     // that was dropped this session due to a transient decrypt failure). Never erase a stored
     // ciphertext just because the in-memory secret is missing.
@@ -138,6 +161,23 @@ export function persistConfig(config: PersistedConfig): void {
         const prev = existing[f]
         if (typeof prev === 'string' && prev) {
           ;(out as Record<string, unknown>)[f] = prev
+        }
+      }
+    }
+    for (const field of PROFILE_FIELDS) {
+      if (field in out) {
+        const profiles = out[field]
+        if (isProviderProfileArray(profiles)) {
+          outRecord[field] = profiles.length ? encryptValue(JSON.stringify(profiles)) : []
+        } else {
+          delete outRecord[field]
+        }
+      } else {
+        // Each profile bundle contains provider keys, so an omitted bundle preserves the existing
+        // encrypted value just like an omitted active key.
+        const previous = existing[field]
+        if (typeof previous === 'string' || Array.isArray(previous)) {
+          outRecord[field] = previous
         }
       }
     }

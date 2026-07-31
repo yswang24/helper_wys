@@ -9,6 +9,9 @@ describe('config:set merge helpers', () => {
       model: 'm',
       screenshotMode: 'ocr',
       asrModel: 'whisper',
+      llmProviderProfiles: [],
+      visionProviderProfiles: [],
+      asrProviderProfiles: [],
       overlayOpacity: 0.8
     })
     expect(llmPartial).toEqual({ model: 'm' }) // screenshotMode NEVER leaks to setConfig

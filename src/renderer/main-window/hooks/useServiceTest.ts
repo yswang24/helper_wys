@@ -6,6 +6,8 @@ interface TestCfg {
   apiKey: string
   baseUrl: string
   model: string
+  visionApiKey: string
+  visionBaseUrl: string
   visionModel: string
   asrApiKey: string
   asrBaseUrl: string
@@ -46,8 +48,8 @@ export function useServiceTest(cfg: TestCfg): {
   const testVision = () =>
     run(setVisionTest, () =>
       window.electronAPI.testVision({
-        apiKey: cfg.apiKey,
-        baseUrl: cfg.baseUrl,
+        apiKey: cfg.visionApiKey,
+        baseUrl: cfg.visionBaseUrl,
         visionModel: cfg.visionModel
       })
     )

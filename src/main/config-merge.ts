@@ -16,8 +16,17 @@ export function splitConfigSet(p: Record<string, unknown>): {
   llmPartial: Record<string, unknown>
   overlayOpacity?: unknown
 } {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { asrApiKey, asrBaseUrl, asrModel, overlayOpacity, screenshotMode, ...llmPartial } = p
+  const {
+    asrApiKey: _asrApiKey,
+    asrBaseUrl: _asrBaseUrl,
+    asrModel: _asrModel,
+    llmProviderProfiles: _llmProviderProfiles,
+    visionProviderProfiles: _visionProviderProfiles,
+    asrProviderProfiles: _asrProviderProfiles,
+    overlayOpacity,
+    screenshotMode: _screenshotMode,
+    ...llmPartial
+  } = p
   return { llmPartial, overlayOpacity }
 }
 

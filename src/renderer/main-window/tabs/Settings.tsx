@@ -3,26 +3,103 @@ import { TestRow } from '../components/TestRow'
 import { useServiceTest } from '../hooks/useServiceTest'
 import { useConfig } from '../hooks/useConfig'
 
+const TEXT_PRESETS = [
+  {
+    label: '硅基流动',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    model: 'Qwen/Qwen2.5-7B-Instruct'
+  },
+  {
+    label: '阿里云百炼',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3.5-omni-plus'
+  },
+  {
+    label: '小米 MiMo Token Plan',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    model: 'mimo-v2.5-pro'
+  }
+] as const
+
+const VISION_PRESETS = [
+  {
+    label: '硅基流动',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    model: 'Qwen/Qwen2-VL-7B-Instruct'
+  },
+  {
+    label: '阿里云百炼',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3.5-omni-plus'
+  },
+  {
+    label: '小米 MiMo Token Plan',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    model: 'mimo-v2.5'
+  }
+] as const
+
+const AUDIO_PRESETS = [
+  {
+    label: '硅基流动',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    model: 'FunAudioLLM/SenseVoiceSmall'
+  },
+  {
+    label: '阿里云百炼',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3-asr-flash'
+  },
+  {
+    label: '小米 MiMo Token Plan',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    model: 'mimo-v2.5-asr'
+  }
+] as const
+
 export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
   const {
-    apiKey, setApiKey,
-    baseUrl, setBaseUrl,
-    model, setModel,
-    visionModel, setVisionModel,
-    asrApiKey, setAsrApiKey,
-    asrBaseUrl, setAsrBaseUrl,
-    asrModel, setAsrModel,
-    overlayOpacity, setOverlayOpacity,
-    screenshotMode, setScreenshotMode,
-    screenshotPrompt, setScreenshotPrompt,
-    resume, setResume,
-    answerLang, setAnswerLang,
-    saved, saveErr, save
+    apiKey,
+    setApiKey,
+    baseUrl,
+    setBaseUrl,
+    model,
+    setModel,
+    switchLlmProvider,
+    visionApiKey,
+    setVisionApiKey,
+    visionBaseUrl,
+    setVisionBaseUrl,
+    visionModel,
+    setVisionModel,
+    switchVisionProvider,
+    asrApiKey,
+    setAsrApiKey,
+    asrBaseUrl,
+    setAsrBaseUrl,
+    asrModel,
+    setAsrModel,
+    switchAsrProvider,
+    overlayOpacity,
+    setOverlayOpacity,
+    screenshotMode,
+    setScreenshotMode,
+    screenshotPrompt,
+    setScreenshotPrompt,
+    resume,
+    setResume,
+    answerLang,
+    setAnswerLang,
+    saved,
+    saveErr,
+    save
   } = useConfig(onSaved)
   const { llmTest, visionTest, asrTest, testLlm, testVision, testAsr } = useServiceTest({
     apiKey,
     baseUrl,
     model,
+    visionApiKey,
+    visionBaseUrl,
     visionModel,
     asrApiKey,
     asrBaseUrl,
@@ -69,10 +146,18 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
             : '先识别：先 OCR 出可编辑文字，确认/纠错后再发给 AI'}
         </div>
         <div className="flex gap-2">
-          {([['direct', '直接解答（快）'], ['ocr', '先识别可编辑']] as ['direct' | 'ocr', string][]).map(([m, label]) => (
+          {(
+            [
+              ['direct', '直接解答（快）'],
+              ['ocr', '先识别可编辑']
+            ] as ['direct' | 'ocr', string][]
+          ).map(([m, label]) => (
             <button
               key={m}
-              onClick={() => { setScreenshotMode(m); window.electronAPI.setConfig({ screenshotMode: m }) }}
+              onClick={() => {
+                setScreenshotMode(m)
+                window.electronAPI.setConfig({ screenshotMode: m })
+              }}
               className="px-3 py-1 text-xs rounded transition-colors"
               style={{
                 background: screenshotMode === m ? '#1d4ed8' : '#1e1e2e',
@@ -98,12 +183,21 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
             <textarea
               value={screenshotPrompt}
               onChange={(e) => setScreenshotPrompt(e.target.value)}
-              onBlur={(e) => { e.target.style.borderColor = '#1e1e3a'; window.electronAPI.setConfig({ screenshotPrompt }) }}
+              onBlur={(e) => {
+                e.target.style.borderColor = '#1e1e3a'
+                window.electronAPI.setConfig({ screenshotPrompt })
+              }}
               placeholder="例如：分析并解答图片中的题目，先给出思路，再给出实现，优先 LeetCode 风格"
               rows={3}
               spellCheck={false}
               className="w-full rounded-lg px-3 py-2 text-xs resize-none outline-none transition-colors"
-              style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#e2e8f0', lineHeight: '1.6', fontFamily: 'inherit' }}
+              style={{
+                background: '#0f0f1a',
+                border: '1px solid #1e1e3a',
+                color: '#e2e8f0',
+                lineHeight: '1.6',
+                fontFamily: 'inherit'
+              }}
               onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
             />
           </div>
@@ -129,10 +223,19 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
               : '跟随提问语言：中文题中文答、英文题英文答'}
         </div>
         <div className="flex gap-2">
-          {([['zh', '中文'], ['en', 'English'], ['auto', '跟随提问']] as ['zh' | 'en' | 'auto', string][]).map(([m, label]) => (
+          {(
+            [
+              ['zh', '中文'],
+              ['en', 'English'],
+              ['auto', '跟随提问']
+            ] as ['zh' | 'en' | 'auto', string][]
+          ).map(([m, label]) => (
             <button
               key={m}
-              onClick={() => { setAnswerLang(m); window.electronAPI.setConfig({ answerLang: m }) }}
+              onClick={() => {
+                setAnswerLang(m)
+                window.electronAPI.setConfig({ answerLang: m })
+              }}
               className="px-3 py-1 text-xs rounded transition-colors"
               style={{
                 background: answerLang === m ? '#1d4ed8' : '#1e1e2e',
@@ -151,17 +254,27 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
           个人背景 / 简历要点（可选）
         </label>
         <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
-          粘贴技术栈、项目经历、目标级别等。AI 回答"做过什么项目"这类个人问题时会以第一人称贴合这份背景，而不是编标准答案。
+          粘贴技术栈、项目经历、目标级别等。AI
+          回答"做过什么项目"这类个人问题时会以第一人称贴合这份背景，而不是编标准答案。
         </div>
         <textarea
           value={resume}
           onChange={(e) => setResume(e.target.value)}
-          onBlur={(e) => { e.target.style.borderColor = '#1e1e3a'; window.electronAPI.setConfig({ resume }) }}
+          onBlur={(e) => {
+            e.target.style.borderColor = '#1e1e3a'
+            window.electronAPI.setConfig({ resume })
+          }}
           placeholder="例如：5 年后端，主做 Go/K8s；负责过日均 10 亿请求的网关系统，主导过一次跨机房容灾演练…"
           rows={5}
           spellCheck={false}
           className="w-full rounded-lg px-3 py-2 text-xs resize-y outline-none transition-colors"
-          style={{ background: '#0f0f1a', border: '1px solid #1e1e3a', color: '#e2e8f0', lineHeight: '1.6', fontFamily: 'inherit' }}
+          style={{
+            background: '#0f0f1a',
+            border: '1px solid #1e1e3a',
+            color: '#e2e8f0',
+            lineHeight: '1.6',
+            fontFamily: 'inherit'
+          }}
           onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
         />
       </div>
@@ -169,128 +282,177 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       {/* Divider */}
       <div style={{ borderTop: '1px solid #1e1e2e' }} />
 
-      {/* LLM section */}
+      {/* Text model */}
       <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#3b82f6' }}>
-        AI 问答（LLM）
+        文本模型
       </div>
       <Field
-        label="API Key"
-        hint="DeepSeek / OpenAI 兼容服务的密钥"
+        label="文本 API Key"
+        hint="仅用于文字和语音提问后的文本回答"
         type="password"
         value={apiKey}
         onChange={setApiKey}
         placeholder="sk-..."
       />
       <Field
-        label="Base URL"
-        hint="API 地址，默认 DeepSeek"
+        label="文本 Base URL"
+        hint="文本模型的 OpenAI 兼容 API 地址"
         value={baseUrl}
         onChange={setBaseUrl}
         placeholder="https://api.deepseek.com"
       />
       <Field
-        label="问答模型"
+        label="文本模型"
         hint="语音/文字问答使用的模型"
         value={model}
         onChange={setModel}
         placeholder="deepseek-chat"
       />
-      <Field
-        label="视觉模型（截图解题）"
-        hint="支持图像输入的模型，用于 ⌘⌥S 框选和 fn⇧ 全屏直发"
-        value={visionModel}
-        onChange={setVisionModel}
-        placeholder="gpt-4o / deepseek-vl2"
-      />
-
-      {/* LLM preset shortcuts */}
       <div>
-        <div className="text-xs mb-2" style={{ color: '#475569' }}>LLM 快速切换</div>
+        <div className="text-xs mb-2" style={{ color: '#475569' }}>
+          文本快速切换
+        </div>
         <div className="flex gap-2 flex-wrap">
-          {[
-            { label: 'DeepSeek Chat', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', visionModel: 'deepseek-chat' },
-            { label: 'DeepSeek Coder', baseUrl: 'https://api.deepseek.com', model: 'deepseek-coder', visionModel: 'deepseek-chat' },
-            { label: 'Qwen Plus', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', visionModel: 'qwen-vl-plus' },
-            { label: 'GPT-4o', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', visionModel: 'gpt-4o' },
-            { label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', visionModel: 'Qwen/Qwen2-VL-7B-Instruct' }
-          ].map((p) => (
+          {TEXT_PRESETS.map((preset) => (
             <button
-              key={p.label}
-              onClick={() => { setBaseUrl(p.baseUrl); setModel(p.model); setVisionModel(p.visionModel) }}
+              key={preset.label}
+              onClick={() => switchLlmProvider(preset)}
               className="px-2 py-1 text-xs rounded transition-colors"
-              style={{ background: '#1e1e2e', color: '#64748b', border: '1px solid #2d2d44', cursor: 'pointer' }}
+              style={{
+                background: '#1e1e2e',
+                color: '#64748b',
+                border: '1px solid #2d2d44',
+                cursor: 'pointer'
+              }}
             >
-              {p.label}
+              {preset.label}
             </button>
           ))}
         </div>
       </div>
-
-      <TestRow label="测试问答模型" onTest={testLlm} state={llmTest} />
-      <TestRow label="测试视觉模型" onTest={testVision} state={visionTest} />
+      <TestRow label="测试文本模型" onTest={testLlm} state={llmTest} />
 
       {/* Divider */}
       <div style={{ borderTop: '1px solid #1e1e2e' }} />
 
-      {/* ASR section */}
-      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#7c3aed' }}>
-        语音识别（系统音频 ASR）
+      {/* Vision model */}
+      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#ec4899' }}>
+        视频 / 视觉模型
       </div>
       <Field
-        label="ASR API Key"
-        hint="Whisper 兼容服务密钥。推荐 Groq（免费额度大）"
+        label="视觉 API Key"
+        hint="仅用于截图识别和图片解题，不与文本模型共用"
         type="password"
-        value={asrApiKey}
-        onChange={setAsrApiKey}
-        placeholder="gsk_... 或 sk-..."
+        value={visionApiKey}
+        onChange={setVisionApiKey}
+        placeholder="输入视觉供应商的 API Key"
       />
       <Field
-        label="ASR Base URL"
-        hint="Whisper API 地址"
-        value={asrBaseUrl}
-        onChange={setAsrBaseUrl}
-        placeholder="https://api.groq.com/openai/v1"
+        label="视觉 Base URL"
+        hint="视觉模型的 OpenAI 兼容 API 地址"
+        value={visionBaseUrl}
+        onChange={setVisionBaseUrl}
+        placeholder="https://api.siliconflow.cn/v1"
       />
       <Field
-        label="ASR 模型"
-        hint="Whisper 模型名称"
-        value={asrModel}
-        onChange={setAsrModel}
-        placeholder="whisper-large-v3"
+        label="视觉模型"
+        hint="支持图像输入，用于 ⌘⌥S 框选和 fn⇧ 全屏直发"
+        value={visionModel}
+        onChange={setVisionModel}
+        placeholder="Qwen/Qwen2-VL-7B-Instruct"
       />
-
-      {/* ASR preset shortcuts */}
       <div>
-        <div className="text-xs mb-2" style={{ color: '#475569' }}>ASR 快速切换</div>
+        <div className="text-xs mb-2" style={{ color: '#475569' }}>
+          视觉快速切换
+        </div>
         <div className="flex gap-2 flex-wrap">
-          {[
-            { label: 'Groq (免费)', asrBaseUrl: 'https://api.groq.com/openai/v1', asrModel: 'whisper-large-v3' },
-            { label: 'OpenAI Whisper', asrBaseUrl: 'https://api.openai.com/v1', asrModel: 'whisper-1' },
-            { label: '硅基流动', asrBaseUrl: 'https://api.siliconflow.cn/v1', asrModel: 'FunAudioLLM/SenseVoiceSmall' },
-          ].map((p) => (
+          {VISION_PRESETS.map((preset) => (
             <button
-              key={p.label}
-              onClick={() => { setAsrBaseUrl(p.asrBaseUrl); setAsrModel(p.asrModel) }}
+              key={preset.label}
+              onClick={() => switchVisionProvider(preset)}
               className="px-2 py-1 text-xs rounded transition-colors"
-              style={{ background: '#1e1e2e', color: '#64748b', border: '1px solid #2d2d44', cursor: 'pointer' }}
+              style={{
+                background: '#1e1e2e',
+                color: '#64748b',
+                border: '1px solid #2d2d44',
+                cursor: 'pointer'
+              }}
             >
-              {p.label}
+              {preset.label}
             </button>
           ))}
         </div>
       </div>
+      <TestRow label="测试视觉模型" onTest={testVision} state={visionTest} />
 
-      <TestRow label="测试 ASR 连接" onTest={testAsr} state={asrTest} />
+      <div style={{ borderTop: '1px solid #1e1e2e' }} />
+
+      {/* Audio model */}
+      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#7c3aed' }}>
+        音频模型（语音识别 ASR）
+      </div>
+      <Field
+        label="音频 API Key"
+        hint="当前语音供应商的密钥；切换供应商时会分别保存"
+        type="password"
+        value={asrApiKey}
+        onChange={setAsrApiKey}
+        placeholder="输入当前语音供应商的 API Key"
+      />
+      <Field
+        label="音频 Base URL"
+        hint="语音服务的 OpenAI 兼容 API 地址"
+        value={asrBaseUrl}
+        onChange={setAsrBaseUrl}
+        placeholder="https://api.siliconflow.cn/v1"
+      />
+      <Field
+        label="音频模型"
+        hint="语音转文字模型名称"
+        value={asrModel}
+        onChange={setAsrModel}
+        placeholder="FunAudioLLM/SenseVoiceSmall"
+      />
+      <div>
+        <div className="text-xs mb-2" style={{ color: '#475569' }}>
+          音频快速切换
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          {AUDIO_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              onClick={() => switchAsrProvider(preset)}
+              className="px-2 py-1 text-xs rounded transition-colors"
+              style={{
+                background: '#1e1e2e',
+                color: '#64748b',
+                border: '1px solid #2d2d44',
+                cursor: 'pointer'
+              }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <TestRow label="测试音频模型" onTest={testAsr} state={asrTest} />
 
       <button
         onClick={save}
         className="px-4 py-2 text-sm rounded-lg font-medium mt-2 transition-colors"
-        style={{ background: saved ? '#16a34a' : '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}
+        style={{
+          background: saved ? '#16a34a' : '#3b82f6',
+          color: '#fff',
+          border: 'none',
+          cursor: 'pointer'
+        }}
       >
         {saved ? '✓ 已保存' : '保存设置'}
       </button>
       {saveErr && (
-        <div className="text-xs" style={{ color: '#f87171' }}>✗ {saveErr}</div>
+        <div className="text-xs" style={{ color: '#f87171' }}>
+          ✗ {saveErr}
+        </div>
       )}
     </div>
   )

@@ -7,7 +7,7 @@
 //
 // Config wire types come from the canonical shared/config.ts (PublicConfig, ScreenshotMode).
 // `FullConfig` (the flat config:get response) stays here as an IPC-layer type.
-import type { ScreenshotMode, PublicConfig } from './config'
+import type { ScreenshotMode, PublicConfig, ProviderProfile } from './config'
 
 export type OverlayMode = 'passthrough' | 'interactive'
 export type AnswerScrollDirection = 'up' | 'down'
@@ -64,7 +64,11 @@ export interface FullConfig {
   apiKey: string
   baseUrl: string
   model: string
+  llmProviderProfiles: ProviderProfile[]
+  visionApiKey: string
+  visionBaseUrl: string
   visionModel: string
+  visionProviderProfiles: ProviderProfile[]
   jobDescription: string
   resume?: string
   answerLang?: string
@@ -72,6 +76,7 @@ export interface FullConfig {
   asrApiKey: string
   asrBaseUrl: string
   asrModel: string
+  asrProviderProfiles: ProviderProfile[]
   overlayOpacity?: number
   screenshotMode?: ScreenshotMode
 }

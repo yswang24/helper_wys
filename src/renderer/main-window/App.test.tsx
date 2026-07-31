@@ -47,7 +47,12 @@ describe('main-window App', () => {
     // Content unique to each tab is in the DOM simultaneously (hidden via display:none, not unmounted).
     await waitFor(() => expect(screen.getByText('手动输入问题')).toBeInTheDocument()) // Ask
     expect(screen.getByText('默认输入设备（麦克风）')).toBeInTheDocument() // Voice
-    expect(screen.getByText('API Key')).toBeInTheDocument() // Settings
+    expect(screen.getAllByText('文本模型').length).toBeGreaterThan(0) // Settings
+    expect(screen.getByText('视频 / 视觉模型')).toBeInTheDocument()
+    expect(screen.getByText('音频模型（语音识别 ASR）')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '硅基流动' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: '阿里云百炼' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: '小米 MiMo Token Plan' })).toHaveLength(3)
     expect(await screen.findByText('fn⇧')).toBeInTheDocument()
     expect(screen.getByText('⌘⌥↑ / ⌘⌥↓')).toBeInTheDocument()
     expect(screen.getByText(/滚动模式（再按关闭/)).toBeInTheDocument()

@@ -51,9 +51,12 @@ export function registerConfigIpc(deps: ConfigDeps): void {
     const persisted = deps.loadPersistedConfig()
     return {
       ...deps.getConfig(),
+      llmProviderProfiles: persisted.llmProviderProfiles ?? [],
+      visionProviderProfiles: persisted.visionProviderProfiles ?? [],
       asrApiKey: asr.apiKey,
       asrBaseUrl: asr.baseUrl,
       asrModel: asr.model,
+      asrProviderProfiles: persisted.asrProviderProfiles ?? [],
       overlayOpacity: persisted.overlayOpacity ?? 0.94,
       screenshotMode: persisted.screenshotMode ?? 'direct'
     }

@@ -8,6 +8,8 @@ export interface LLMConfig {
   apiKey: string
   baseUrl: string
   model: string
+  visionApiKey: string
+  visionBaseUrl: string
   visionModel: string
   jobDescription: string
   // 候选人背景/简历要点 — 注入 system prompt（见 buildBaseMessages），让"你做过什么项目"这类
@@ -25,6 +27,8 @@ const DEFAULT_CONFIG: LLMConfig = {
   apiKey: '',
   baseUrl: 'https://api.deepseek.com',
   model: 'deepseek-chat',
+  visionApiKey: '',
+  visionBaseUrl: 'https://api.deepseek.com',
   visionModel: 'deepseek-chat',
   jobDescription: '',
   resume: '',
@@ -33,7 +37,8 @@ const DEFAULT_CONFIG: LLMConfig = {
 }
 
 // Used when screenshotPrompt is blank — the original built-in instruction.
-const DEFAULT_SCREENSHOT_PROMPT = '请解答这张截图里的题目。如果是代码/算法题，给出完整可运行的解法并简要说明思路。'
+const DEFAULT_SCREENSHOT_PROMPT =
+  '请解答这张截图里的题目。如果是代码/算法题，给出完整可运行的解法并简要说明思路。'
 
 // In-memory config, updated via IPC from main window
 let currentConfig: LLMConfig = { ...DEFAULT_CONFIG }
@@ -79,7 +84,12 @@ function notifyMain(channel: string, payload: unknown): void {
 
 export function setConfig(partial: Partial<LLMConfig>): void {
   currentConfig = { ...currentConfig, ...partial }
-  console.log('[LLM] config updated:', { baseUrl: currentConfig.baseUrl, model: currentConfig.model, visionModel: currentConfig.visionModel })
+  console.log('[LLM] config updated:', {
+    baseUrl: currentConfig.baseUrl,
+    model: currentConfig.model,
+    visionBaseUrl: currentConfig.visionBaseUrl,
+    visionModel: currentConfig.visionModel
+  })
 }
 
 export function getConfig(): LLMConfig {
@@ -117,12 +127,15 @@ async function streamChat(
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
   questionLabel: string,
   historyQuestion: string,
-  overlayWindow: BrowserWindow
+  overlayWindow: BrowserWindow,
+  provider?: { apiKey: string; baseUrl: string; label: string }
 ): Promise<void> {
-  if (!currentConfig.apiKey) {
-    const message = '请先在设置中填写 API Key'
+  const providerApiKey = provider?.apiKey ?? currentConfig.apiKey
+  const providerBaseUrl = provider?.baseUrl ?? currentConfig.baseUrl
+  if (!providerApiKey) {
+    const message = `请先在设置中填写${provider?.label ?? '文本'} API Key`
     safeSend(overlayWindow, 'llm:error', { id: null, message })
-    notifyMain('llm:error', { id: null, message })  // so a failed Ask-tab submit re-enables its button
+    notifyMain('llm:error', { id: null, message }) // so a failed Ask-tab submit re-enables its button
     return
   }
 
@@ -133,7 +146,7 @@ async function streamChat(
     return
   }
 
-  const client = getOpenAIClient({ apiKey: currentConfig.apiKey, baseURL: currentConfig.baseUrl })
+  const client = getOpenAIClient({ apiKey: providerApiKey, baseURL: providerBaseUrl })
 
   const id = nextStreamId++
   const myGen = ++streamGen
@@ -150,7 +163,10 @@ async function streamChat(
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   const armIdle = (): void => {
     if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => { timedOut = true; abort.abort() }, 30000)
+    idleTimer = setTimeout(() => {
+      timedOut = true
+      abort.abort()
+    }, 30000)
   }
 
   try {
@@ -172,7 +188,10 @@ async function streamChat(
       const content = chunk.choices[0]?.delta?.content ?? ''
       if (content) {
         fullAnswer += content
-        if (!safeSend(overlayWindow, 'llm:chunk', { id, chunk: content })) { abort.abort(); break }
+        if (!safeSend(overlayWindow, 'llm:chunk', { id, chunk: content })) {
+          abort.abort()
+          break
+        }
       }
     }
 
@@ -189,7 +208,7 @@ async function streamChat(
     // inline error frame the SDK parsed without throwing). Surface it instead of a silent empty
     // bubble — mirrors extractImageText's empty-content handling.
     if (!abort.signal.aborted && !fullAnswer.trim()) {
-      const message = `模型未返回内容，请检查模型名是否正确/是否支持该接口\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]`
+      const message = `模型未返回内容，请检查模型名是否正确/是否支持该接口\n[URL: ${providerBaseUrl}, 模型: ${model}]`
       safeSend(overlayWindow, 'llm:error', { id, message })
       notifyMain('llm:error', { id, message })
     } else {
@@ -198,17 +217,17 @@ async function streamChat(
     }
   } catch (err: unknown) {
     if (timedOut) {
-      const message = `请求超时（30 秒无响应），请检查网络或 Base URL\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]`
+      const message = `请求超时（30 秒无响应），请检查网络或 Base URL\n[URL: ${providerBaseUrl}, 模型: ${model}]`
       safeSend(overlayWindow, 'llm:error', { id, message })
       notifyMain('llm:error', { id, message })
     } else if (abort.signal.aborted) {
       // The SDK throws APIUserAbortError (name 'Error', not 'AbortError') when aborted before the
       // first chunk, so detect user-stop via our own signal rather than the error name.
-      safeSend(overlayWindow, 'llm:done', { id })  // treat user-stop as done
+      safeSend(overlayWindow, 'llm:done', { id }) // treat user-stop as done
       notifyMain('llm:done', { id })
     } else {
       const msg = err instanceof Error ? err.message : String(err)
-      const message = `${msg}\n[URL: ${currentConfig.baseUrl}, 模型: ${model}]`
+      const message = `${msg}\n[URL: ${providerBaseUrl}, 模型: ${model}]`
       safeSend(overlayWindow, 'llm:error', { id, message })
       notifyMain('llm:error', { id, message })
     }
@@ -224,7 +243,12 @@ async function streamChat(
 export function streamAnswer(question: string, overlayWindow: BrowserWindow): Promise<void> {
   return streamChat(
     currentConfig.model,
-    buildMessages(question, currentConfig.jobDescription, currentConfig.resume, conversationHistory),
+    buildMessages(
+      question,
+      currentConfig.jobDescription,
+      currentConfig.resume,
+      conversationHistory
+    ),
     question,
     question,
     overlayWindow
@@ -233,15 +257,29 @@ export function streamAnswer(question: string, overlayWindow: BrowserWindow): Pr
 
 // Direct screenshot solving: feed the cropped image straight to the vision model and STREAM the
 // answer — one API round trip instead of OCR-then-ask (two). Used by the ⌘⌥S "直接解答" path.
-export function streamImageAnswer(imageBase64: string, overlayWindow: BrowserWindow): Promise<void> {
+export function streamImageAnswer(
+  imageBase64: string,
+  overlayWindow: BrowserWindow
+): Promise<void> {
   const model = currentConfig.visionModel || currentConfig.model
   const promptText = currentConfig.screenshotPrompt?.trim() || DEFAULT_SCREENSHOT_PROMPT
   return streamChat(
     model,
-    buildImageMessages(imageBase64, currentConfig.jobDescription, currentConfig.resume, conversationHistory, promptText),
+    buildImageMessages(
+      imageBase64,
+      currentConfig.jobDescription,
+      currentConfig.resume,
+      conversationHistory,
+      promptText
+    ),
     '📷 截图解题',
     '[截图题目]',
-    overlayWindow
+    overlayWindow,
+    {
+      apiKey: currentConfig.visionApiKey,
+      baseUrl: currentConfig.visionBaseUrl,
+      label: '视觉'
+    }
   )
 }
 
@@ -249,39 +287,53 @@ export async function extractImageText(
   imageBase64: string,
   overlayWindow: BrowserWindow
 ): Promise<void> {
-  if (!currentConfig.apiKey) {
-    safeSend(overlayWindow, 'image:error', '请先在设置中填写 API Key')
+  if (!currentConfig.visionApiKey) {
+    safeSend(overlayWindow, 'image:error', '请先在设置中填写视觉 API Key')
     return
   }
 
   // maxRetries: 0 — fail fast; don't let SDK retries hang the "识别中" status for minutes
-  const client = getOpenAIClient({ apiKey: currentConfig.apiKey, baseURL: currentConfig.baseUrl, maxRetries: 0 })
+  const client = getOpenAIClient({
+    apiKey: currentConfig.visionApiKey,
+    baseURL: currentConfig.visionBaseUrl,
+    maxRetries: 0
+  })
 
   const useModel = currentConfig.visionModel || currentConfig.model
-  console.log(`[ImageOCR] model=${useModel}, baseURL=${currentConfig.baseUrl}, imageSize=${Math.round(imageBase64.length * 3 / 4 / 1024)}KB`)
+  console.log(
+    `[ImageOCR] model=${useModel}, baseURL=${currentConfig.visionBaseUrl}, imageSize=${Math.round((imageBase64.length * 3) / 4 / 1024)}KB`
+  )
 
   // Notify overlay that extraction is starting
   safeSend(overlayWindow, 'image:status', 'extracting')
 
   try {
     const timeout = AbortSignal.timeout(45000)
-    const result = await client.chat.completions.create({
-      model: useModel,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
-            { type: 'text', text: '请完整识别图片中的全部文字（含代码，保留换行与缩进），逐行原样输出，不要省略、不要总结、不要补充解释。' }
-          ]
-        }
-      ],
-      max_tokens: 4000,
-      temperature: 0
-    }, { signal: timeout })
+    const result = await client.chat.completions.create(
+      {
+        model: useModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
+              {
+                type: 'text',
+                text: '请完整识别图片中的全部文字（含代码，保留换行与缩进），逐行原样输出，不要省略、不要总结、不要补充解释。'
+              }
+            ]
+          }
+        ],
+        max_tokens: 4000,
+        temperature: 0
+      },
+      { signal: timeout }
+    )
 
     const text = result.choices[0]?.message?.content ?? ''
-    console.log(`[ImageOCR] done, extracted ${text.length} chars, usage: ${JSON.stringify(result.usage)}`)
+    console.log(
+      `[ImageOCR] done, extracted ${text.length} chars, usage: ${JSON.stringify(result.usage)}`
+    )
     console.log(`[ImageOCR] preview: ${text.slice(0, 200)}`)
     if (text.trim()) {
       safeSend(overlayWindow, 'image:text', text)
@@ -311,15 +363,23 @@ const ANSWER_RULES = `回答要求：
 // 答案仍是中文、没法照读；现在跟随 answerLang 配置（设置页「回答个性化」）。
 function answerLangPhrase(): string {
   switch (currentConfig.answerLang) {
-    case 'en': return '简洁、准确的英文'
-    case 'auto': return '与提问相同的语言（英文题用英文、中文题用中文）简洁准确地'
-    default: return '简洁、准确的中文'
+    case 'en':
+      return '简洁、准确的英文'
+    case 'auto':
+      return '与提问相同的语言（英文题用英文、中文题用中文）简洁准确地'
+    default:
+      return '简洁、准确的中文'
   }
 }
 
 // System prompt + replayed rolling memory, shared by the text and image entry points.
 // The caller appends the final user turn (text or image) to the returned array.
-function buildBaseMessages(intro: string, jobDescription: string, resume: string, history: HistoryRound[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+function buildBaseMessages(
+  intro: string,
+  jobDescription: string,
+  resume: string,
+  history: HistoryRound[]
+): OpenAI.Chat.ChatCompletionMessageParam[] {
   let systemContent = `${intro}\n\n${ANSWER_RULES}`
   if (resume.trim()) {
     systemContent += `\n\n【候选人背景/简历】\n${resume.trim()}\n回答自我介绍、项目经历等个人问题时，用第一人称、结合以上真实背景作答；不要编造背景里没有的经历。`
@@ -353,7 +413,12 @@ function buildMessages(
   resume: string,
   history: HistoryRound[] = []
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  const messages = buildBaseMessages(`你是一个专业的技术面试助手。请用${answerLangPhrase()}回答面试问题。`, jobDescription, resume, history)
+  const messages = buildBaseMessages(
+    `你是一个专业的技术面试助手。请用${answerLangPhrase()}回答面试问题。`,
+    jobDescription,
+    resume,
+    history
+  )
   messages.push({ role: 'user', content: question })
   return messages
 }
@@ -365,7 +430,12 @@ function buildImageMessages(
   history: HistoryRound[],
   promptText: string
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
-  const messages = buildBaseMessages(`你是一个专业的技术面试助手。下面给你一张题目截图，请先看懂图里的题目/代码，再用${answerLangPhrase()}作答。`, jobDescription, resume, history)
+  const messages = buildBaseMessages(
+    `你是一个专业的技术面试助手。下面给你一张题目截图，请先看懂图里的题目/代码，再用${answerLangPhrase()}作答。`,
+    jobDescription,
+    resume,
+    history
+  )
   messages.push({
     role: 'user',
     content: [
@@ -379,9 +449,11 @@ function buildImageMessages(
 // Connectivity test for the Settings UI — uses the values currently in the form
 // (not the saved config), so the user can verify before saving. OpenAI-compatible,
 // so SiliconFlow / DeepSeek / Groq / OpenAI all work through the same path.
-export async function testLLMConnection(
-  cfg: { apiKey: string; baseUrl: string; model: string }
-): Promise<{ ok: boolean; message: string }> {
+export async function testLLMConnection(cfg: {
+  apiKey: string
+  baseUrl: string
+  model: string
+}): Promise<{ ok: boolean; message: string }> {
   if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
   if (!cfg.model) return { ok: false, message: '请先填写模型名' }
   const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
@@ -391,7 +463,10 @@ export async function testLLMConnection(
       { model: cfg.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 },
       { signal: AbortSignal.timeout(15000) }
     )
-    return { ok: true, message: `连接成功 · 模型 ${r.model || cfg.model} · ${Date.now() - start}ms` }
+    return {
+      ok: true,
+      message: `连接成功 · 模型 ${r.model || cfg.model} · ${Date.now() - start}ms`
+    }
   } catch (err) {
     return { ok: false, message: describeApiError(err) }
   }
@@ -400,9 +475,11 @@ export async function testLLMConnection(
 // Vision-model connectivity test — sends a realistic screenshot (see visionProbe.ts) so
 // the user can verify the model actually accepts image input. Mirrors the real OCR path
 // (same prompt + params), and tiny-image-rejecting VLMs (Qwen-VL etc.) accept it.
-export async function testVisionConnection(
-  cfg: { apiKey: string; baseUrl: string; visionModel: string }
-): Promise<{ ok: boolean; message: string }> {
+export async function testVisionConnection(cfg: {
+  apiKey: string
+  baseUrl: string
+  visionModel: string
+}): Promise<{ ok: boolean; message: string }> {
   if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
   if (!cfg.visionModel) return { ok: false, message: '请先填写视觉模型名' }
   const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
@@ -415,7 +492,10 @@ export async function testVisionConnection(
           {
             role: 'user',
             content: [
-              { type: 'image_url', image_url: { url: `data:image/png;base64,${VISION_PROBE_PNG_B64}` } },
+              {
+                type: 'image_url',
+                image_url: { url: `data:image/png;base64,${VISION_PROBE_PNG_B64}` }
+              },
               { type: 'text', text: '请识别图片中的文字内容，直接输出文字。' }
             ]
           }
@@ -425,7 +505,10 @@ export async function testVisionConnection(
       },
       { signal: AbortSignal.timeout(20000) }
     )
-    return { ok: true, message: `连接成功 · 模型 ${r.model || cfg.visionModel} · ${Date.now() - start}ms` }
+    return {
+      ok: true,
+      message: `连接成功 · 模型 ${r.model || cfg.visionModel} · ${Date.now() - start}ms`
+    }
   } catch (err) {
     return { ok: false, message: describeApiError(err) }
   }

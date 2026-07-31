@@ -10,6 +10,8 @@ const cfg = {
   apiKey: 'k',
   baseUrl: 'b',
   model: 'm',
+  visionApiKey: 'vk',
+  visionBaseUrl: 'vb',
   visionModel: 'vm',
   asrApiKey: 'ak',
   asrBaseUrl: 'ab',
@@ -37,6 +39,11 @@ describe('useServiceTest', () => {
     const { result } = renderHook(() => useServiceTest(cfg))
     await act(async () => {
       await result.current.testVision()
+    })
+    expect(testVision).toHaveBeenCalledWith({
+      apiKey: 'vk',
+      baseUrl: 'vb',
+      visionModel: 'vm'
     })
     expect(result.current.visionTest).toEqual({ st: 'fail', msg: '模型不支持图片' })
   })

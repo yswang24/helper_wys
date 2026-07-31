@@ -14,7 +14,18 @@ export interface ProviderConfig {
   apiKey: string
   baseUrl: string
   model: string
-  visionModel: string
+}
+
+export interface VisionConfig {
+  apiKey: string
+  baseUrl: string
+  model: string
+}
+
+export interface ProviderProfile {
+  apiKey: string
+  baseUrl: string
+  model: string
 }
 
 export interface AsrConfig {
@@ -37,6 +48,7 @@ export interface UiPrefs {
 
 export interface AppConfig {
   provider: ProviderConfig
+  vision: VisionConfig
   asr: AsrConfig
   prompt: PromptConfig
   ui: UiPrefs
@@ -49,13 +61,18 @@ export interface PersistedConfig {
   apiKey?: string
   baseUrl?: string
   model?: string
+  llmProviderProfiles?: ProviderProfile[]
+  visionApiKey?: string
+  visionBaseUrl?: string
   visionModel?: string
+  visionProviderProfiles?: ProviderProfile[]
   jobDescription?: string
   resume?: string
   answerLang?: string
   asrApiKey?: string
   asrBaseUrl?: string
   asrModel?: string
+  asrProviderProfiles?: ProviderProfile[]
   overlayX?: number
   overlayY?: number
   overlayOpacity?: number
@@ -70,15 +87,23 @@ export interface PublicConfig {
 }
 
 // Encrypted-at-rest fields, on the FLAT form. Mirrors store.ts SECRET_FIELDS exactly.
-export const SECRET_FIELDS = ['apiKey', 'asrApiKey'] as const satisfies readonly (keyof PersistedConfig)[]
+export const SECRET_FIELDS = [
+  'apiKey',
+  'visionApiKey',
+  'asrApiKey'
+] as const satisfies readonly (keyof PersistedConfig)[]
 
 // One source of defaults, = the union of the three legacy default constants.
 export const DEFAULTS: AppConfig = {
   provider: {
     apiKey: '',
     baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-chat',
-    visionModel: 'deepseek-chat'
+    model: 'deepseek-chat'
+  },
+  vision: {
+    apiKey: '',
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-chat'
   },
   asr: {
     apiKey: '',
@@ -103,7 +128,9 @@ export function toPersisted(cfg: AppConfig): PersistedConfig {
     apiKey: cfg.provider.apiKey,
     baseUrl: cfg.provider.baseUrl,
     model: cfg.provider.model,
-    visionModel: cfg.provider.visionModel,
+    visionApiKey: cfg.vision.apiKey,
+    visionBaseUrl: cfg.vision.baseUrl,
+    visionModel: cfg.vision.model,
     asrApiKey: cfg.asr.apiKey,
     asrBaseUrl: cfg.asr.baseUrl,
     asrModel: cfg.asr.model,
@@ -123,8 +150,14 @@ export function fromPersisted(raw: PersistedConfig): AppConfig {
     provider: {
       apiKey: raw.apiKey ?? DEFAULTS.provider.apiKey,
       baseUrl: raw.baseUrl ?? DEFAULTS.provider.baseUrl,
-      model: raw.model ?? DEFAULTS.provider.model,
-      visionModel: raw.visionModel ?? DEFAULTS.provider.visionModel
+      model: raw.model ?? DEFAULTS.provider.model
+    },
+    vision: {
+      // Legacy versions shared text credentials with vision. Copy them once when independent
+      // vision fields are absent so an upgrade keeps screenshot solving functional.
+      apiKey: raw.visionApiKey ?? raw.apiKey ?? DEFAULTS.vision.apiKey,
+      baseUrl: raw.visionBaseUrl ?? raw.baseUrl ?? DEFAULTS.vision.baseUrl,
+      model: raw.visionModel ?? DEFAULTS.vision.model
     },
     asr: {
       apiKey: raw.asrApiKey ?? DEFAULTS.asr.apiKey,

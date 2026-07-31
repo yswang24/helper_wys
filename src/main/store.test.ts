@@ -50,11 +50,30 @@ describe('store secret preservation', () => {
   })
 
   it('persistConfig encrypts a non-empty secret when keychain is available', () => {
-    persistConfig({ apiKey: 'sk-x', asrApiKey: 'sk-y' })
+    persistConfig({ apiKey: 'sk-x', visionApiKey: 'sk-v', asrApiKey: 'sk-y' })
     const disk = JSON.parse(readFileSync(cfgPath(), 'utf-8'))
     expect(disk.apiKey.startsWith(ENC_PREFIX)).toBe(true)
     expect(disk.apiKey).not.toBe('sk-x')
     expect(disk.asrApiKey.startsWith(ENC_PREFIX)).toBe(true)
+    expect(disk.visionApiKey.startsWith(ENC_PREFIX)).toBe(true)
+  })
+
+  it('encrypts provider profile bundles and restores their keys', () => {
+    const profiles = [
+      { apiKey: 'provider-key', baseUrl: 'https://provider.example/v1', model: 'model-a' }
+    ]
+    persistConfig({
+      llmProviderProfiles: profiles,
+      visionProviderProfiles: profiles,
+      asrProviderProfiles: profiles
+    })
+
+    const disk = JSON.parse(readFileSync(cfgPath(), 'utf-8'))
+    expect(disk.llmProviderProfiles.startsWith(ENC_PREFIX)).toBe(true)
+    expect(disk.llmProviderProfiles).not.toContain('provider-key')
+    expect(loadPersistedConfig().llmProviderProfiles).toEqual(profiles)
+    expect(loadPersistedConfig().visionProviderProfiles).toEqual(profiles)
+    expect(loadPersistedConfig().asrProviderProfiles).toEqual(profiles)
   })
 
   it('persistConfig falls back to plaintext when keychain is unavailable (never loses the key)', () => {

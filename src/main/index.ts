@@ -3,8 +3,27 @@ import { File as NodeFile } from 'node:buffer'
 // Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
-import { streamAnswer, streamImageAnswer, extractImageText, stopStreaming, forceResetStreaming, isCurrentlyStreaming, setConfig, getConfig, clearHistory, testLLMConnection, testVisionConnection, setMainWindow } from './llm'
-import { transcribeAudio, setASRConfig, getASRConfig, testASRConnection, cleanupStaleTempAudio } from './asr'
+import {
+  streamAnswer,
+  streamImageAnswer,
+  extractImageText,
+  stopStreaming,
+  forceResetStreaming,
+  isCurrentlyStreaming,
+  setConfig,
+  getConfig,
+  clearHistory,
+  testLLMConnection,
+  testVisionConnection,
+  setMainWindow
+} from './llm'
+import {
+  transcribeAudio,
+  setASRConfig,
+  getASRConfig,
+  testASRConnection,
+  cleanupStaleTempAudio
+} from './asr'
 import { loadPersistedConfig, persistConfig } from './store'
 import { createFullScreenCaptureTrigger, registerScreenshotIpc } from './screenshot'
 import { FN_SHIFT_SHORTCUT_LABEL, FnShiftHotkey } from './fn-shift-hotkey'
@@ -16,17 +35,14 @@ import { registerLlmIpc } from './ipc/llm'
 import { registerAsrIpc } from './ipc/asr'
 import { registerOverlayIpc } from './ipc/overlay'
 import { OverlayController } from './overlay-controller'
-import {
-  ANSWER_SCROLL_MODE_SHORTCUTS,
-  createAnswerScrollMode
-} from './answer-scroll-mode'
+import { ANSWER_SCROLL_MODE_SHORTCUTS, createAnswerScrollMode } from './answer-scroll-mode'
 import {
   createOverlayAnswerScrollDispatcher,
   createOverlayAnswerScrollModeDispatcher
 } from './overlay-answer-scroll'
 import { WindowManager } from './window-manager'
 
-const failedShortcuts: string[] = []  // unavailable shortcuts surfaced in the UI
+const failedShortcuts: string[] = [] // unavailable shortcuts surfaced in the UI
 const fnShiftHotkey = new FnShiftHotkey()
 
 // WindowManager owns the main/selector windows + tray; OverlayController owns the stealth overlay.
@@ -98,7 +114,15 @@ app.whenReady().then(() => {
 
   // Restore user settings from disk
   const saved = loadPersistedConfig()
-  if (Object.keys(saved).length) setConfig(saved)
+  if (Object.keys(saved).length) {
+    setConfig({
+      ...saved,
+      // Older versions shared text credentials with screenshots. Preserve that working setup
+      // until the user saves an explicit independent vision provider.
+      visionApiKey: saved.visionApiKey ?? saved.apiKey ?? '',
+      visionBaseUrl: saved.visionBaseUrl ?? saved.baseUrl ?? 'https://api.deepseek.com'
+    })
+  }
   if (saved.asrApiKey || saved.asrBaseUrl || saved.asrModel) {
     setASRConfig({
       // `||` not `??`: a persisted empty string (user cleared the field) must fall back to the
@@ -206,7 +230,8 @@ registerConfigIpc({
   setASRConfig,
   loadPersistedConfig,
   persistConfig,
-  sendOverlayOpacity: (opacity) => overlayController.getWindow()?.webContents.send('overlay:opacity', opacity)
+  sendOverlayOpacity: (opacity) =>
+    overlayController.getWindow()?.webContents.send('overlay:opacity', opacity)
 })
 
 // ── IPC: LLM ──────────────────────────────────────────────────────────────────
@@ -216,7 +241,7 @@ const { startStreamSafely } = createStreamSafe({
   stopStreaming,
   forceResetStreaming,
   getOverlayWindow: () => overlayController.getWindow(),
-  ensureOverlayVisible: () => overlayController.ensureVisible(),
+  ensureOverlayVisible: () => overlayController.ensureVisible()
 })
 
 registerLlmIpc({
