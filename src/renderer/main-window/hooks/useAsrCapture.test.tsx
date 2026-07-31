@@ -74,7 +74,7 @@ const flush = async () => {
 }
 
 describe('useAsrCapture', () => {
-  it('first ⌘⌥X starts a recording', async () => {
+  it('first fn⌃ starts a recording', async () => {
     const { result } = renderHook(() => useAsrCapture(false))
     await act(async () => {
       await toggle()
@@ -85,7 +85,7 @@ describe('useAsrCapture', () => {
     expect(result.current.listening).toBe(true)
   })
 
-  it('second ⌘⌥X stops, transcribes, and appends to the draft', async () => {
+  it('second fn⌃ stops, transcribes, and appends to the draft', async () => {
     const { result } = renderHook(() => useAsrCapture(false))
     await act(async () => {
       await toggle()
@@ -129,7 +129,7 @@ describe('useAsrCapture', () => {
     expect(autoAsk).not.toHaveBeenCalled()
   })
 
-  it('8s guard force-resets transcribing if onstop never fires (⌘⌥X not stranded)', async () => {
+  it('8s guard force-resets transcribing if onstop never fires (fn⌃ not stranded)', async () => {
     vi.useFakeTimers()
     const { result } = renderHook(() => useAsrCapture(false))
     await act(async () => {

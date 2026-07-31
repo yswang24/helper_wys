@@ -8,8 +8,7 @@ import {
 } from './answer-scroll-mode'
 
 type BareArrowShortcut =
-  | typeof ANSWER_SCROLL_MODE_SHORTCUTS.plainUp
-  | typeof ANSWER_SCROLL_MODE_SHORTCUTS.plainDown
+  typeof ANSWER_SCROLL_MODE_SHORTCUTS.plainUp | typeof ANSWER_SCROLL_MODE_SHORTCUTS.plainDown
 
 interface Harness {
   controller: AnswerScrollMode
@@ -62,24 +61,22 @@ describe('AnswerScrollMode', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('exports exact macOS toggle shortcuts and bare arrow accelerators', () => {
+  it('exports the bare arrow accelerators captured while Fn+Option mode is active', () => {
     expect(ANSWER_SCROLL_MODE_SHORTCUTS).toEqual({
-      toggleUp: 'Command+Alt+Up',
-      toggleDown: 'Command+Alt+Down',
       plainUp: 'Up',
       plainDown: 'Down'
     })
   })
 
-  it('atomically captures bare arrows, scrolls immediately, and renews the 30s timeout', () => {
+  it('atomically captures bare arrows and renews the 30s timeout', () => {
     const harness = createHarness()
 
-    harness.controller.toggle('up')
+    harness.controller.toggle()
 
     expect(harness.register).toHaveBeenNthCalledWith(1, 'Up', expect.any(Function))
     expect(harness.register).toHaveBeenNthCalledWith(2, 'Down', expect.any(Function))
     expect(harness.broadcast).toHaveBeenCalledWith(true)
-    expect(harness.dispatch).toHaveBeenCalledWith('up')
+    expect(harness.dispatch).not.toHaveBeenCalled()
     expect(harness.controller.isActive()).toBe(true)
 
     vi.advanceTimersByTime(20_000)
@@ -99,12 +96,12 @@ describe('AnswerScrollMode', () => {
     expect(harness.broadcast).toHaveBeenLastCalledWith(false)
   })
 
-  it('uses either command shortcut as a close toggle without performing another scroll', () => {
+  it('uses Fn+Option as a close toggle without performing a scroll', () => {
     const harness = createHarness()
-    harness.controller.toggle('up')
+    harness.controller.toggle()
     harness.dispatch.mockClear()
 
-    harness.controller.toggle('down')
+    harness.controller.toggle()
 
     expect(harness.dispatch).not.toHaveBeenCalled()
     expect(harness.controller.isActive()).toBe(false)
@@ -117,30 +114,26 @@ describe('AnswerScrollMode', () => {
     ['Up', 'throw'],
     ['Down', 'false'],
     ['Down', 'throw']
-  ])(
-    'rolls back atomically when %s registration returns/does %s but still scrolls once',
-    (failedShortcut, behavior) => {
-      const harness = createHarness({ shortcut: failedShortcut, behavior })
+  ])('rolls back atomically when %s registration returns/does %s', (failedShortcut, behavior) => {
+    const harness = createHarness({ shortcut: failedShortcut, behavior })
 
-      harness.controller.toggle('down')
+    harness.controller.toggle()
 
-      const successfulShortcut = failedShortcut === 'Up' ? 'Down' : 'Up'
-      const expectedUnregisterCount = failedShortcut === 'Down' ? 1 : 0
-      expect(harness.unregister).toHaveBeenCalledTimes(expectedUnregisterCount)
-      if (expectedUnregisterCount > 0) {
-        expect(harness.unregister).toHaveBeenCalledWith(successfulShortcut)
-      }
-      expect(harness.dispatch).toHaveBeenCalledOnce()
-      expect(harness.dispatch).toHaveBeenCalledWith('down')
-      expect(harness.broadcast).not.toHaveBeenCalled()
-      expect(harness.controller.isActive()).toBe(false)
-      expect(vi.getTimerCount()).toBe(0)
+    const successfulShortcut = failedShortcut === 'Up' ? 'Down' : 'Up'
+    const expectedUnregisterCount = failedShortcut === 'Down' ? 1 : 0
+    expect(harness.unregister).toHaveBeenCalledTimes(expectedUnregisterCount)
+    if (expectedUnregisterCount > 0) {
+      expect(harness.unregister).toHaveBeenCalledWith(successfulShortcut)
     }
-  )
+    expect(harness.dispatch).not.toHaveBeenCalled()
+    expect(harness.broadcast).not.toHaveBeenCalled()
+    expect(harness.controller.isActive()).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
   it('deactivate clears the timer and registrations and makes queued arrow callbacks inert', () => {
     const harness = createHarness()
-    harness.controller.toggle('up')
+    harness.controller.toggle()
     const queuedUpHandler = harness.handlers.get('Up')
     harness.dispatch.mockClear()
 

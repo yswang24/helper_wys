@@ -106,16 +106,17 @@ export function App() {
         className="px-4 py-2 text-xs border-t flex gap-3 flex-wrap"
         style={{ borderColor: '#1e1e2e', color: '#334155' }}
       >
-        <span><kbd className="font-mono">⌘⌥H</kbd> 覆盖层</span>
-        <span><kbd className="font-mono">⌘⌥X</kbd> 录音开关</span>
-        <span><kbd className="font-mono">⌘⌥S</kbd> 截图解题</span>
         {status?.platform === 'darwin' && (
           <>
+            <span><kbd className="font-mono">fn⌃</kbd> 录音开关</span>
+            <span><kbd className="font-mono">fn⇧</kbd> 全屏截图</span>
             <span>
-              <kbd className="font-mono">⌘⌥↑ / ⌘⌥↓</kbd>{' '}
+              <kbd className="font-mono">fn⌥</kbd>{' '}
               滚动模式（再按关闭；↑↓ 由 Helper 接管；30 秒无操作关闭）
             </span>
-            <span><kbd className="font-mono">fn⇧</kbd> 全屏直发</span>
+            <span><kbd className="font-mono">fn⌘</kbd> 覆盖层</span>
+            <span><kbd className="font-mono">⌥⌘X</kbd> 输入/穿透模式</span>
+            <span><kbd className="font-mono">⌥⌘Z</kbd> 局部截图</span>
           </>
         )}
       </div>

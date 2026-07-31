@@ -18,7 +18,7 @@ export interface LLMConfig {
   // 回答语言：'zh' 固定中文（旧行为）/ 'en' 固定英文 / 'auto' 跟随提问语言。
   // 字符串而非联合类型：config:set 的 IPC 载荷是 Record<string, string>，与其它字段保持一致。
   answerLang: string
-  // Custom instruction sent alongside screenshots in direct-solve mode (⌘⌥S / Fn+Shift).
+  // Custom instruction sent alongside screenshots in direct-solve mode (⌥⌘Z / Fn+Shift).
   // Empty = default.
   screenshotPrompt: string
 }
@@ -256,7 +256,7 @@ export function streamAnswer(question: string, overlayWindow: BrowserWindow): Pr
 }
 
 // Direct screenshot solving: feed the cropped image straight to the vision model and STREAM the
-// answer — one API round trip instead of OCR-then-ask (two). Used by the ⌘⌥S "直接解答" path.
+// answer — one API round trip instead of OCR-then-ask (two). Used by direct screenshot solving.
 export function streamImageAnswer(
   imageBase64: string,
   overlayWindow: BrowserWindow

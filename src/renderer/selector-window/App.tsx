@@ -52,7 +52,7 @@ export function App() {
       submit(r)
     }
     // No keydown handler: the selector is a non-focusable panel (so it never steals foreground
-    // from the exam), which means it can't receive keyboard. Cancel with ⌘⌥S again.
+    // from the exam), which means it can't receive keyboard. Cancel with ⌥⌘Z again.
     window.addEventListener('mousedown', onDown)
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -79,7 +79,7 @@ export function App() {
           className="absolute left-1/2 top-8 -translate-x-1/2 px-4 py-2 rounded-lg text-sm font-medium pointer-events-none"
           style={{ background: 'rgba(15, 15, 30, 0.9)', border: '1px solid rgba(100, 100, 180, 0.5)', color: '#cbd5e1' }}
         >
-          拖拽选择区域 · 再按 ⌘⌥S 取消
+          拖拽选择区域 · 再按 ⌥⌘Z 取消
         </div>
       )}
 

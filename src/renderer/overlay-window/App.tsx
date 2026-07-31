@@ -168,7 +168,7 @@ export function App() {
 
   // Mouse pass-through & activation are driven by the main process per mode (index.ts
   // applyOverlayMode): 'passthrough' = whole-window click-through + non-focusable (no 切屏);
-  // 'interactive' = focusable + clickable. Toggle via the header badge / ⌘⌥E / tray.
+  // 'interactive' = focusable + clickable. Toggle via ⌥⌘X or the tray.
 
   const allTranscript = finalLines.join(' ')
 
@@ -231,10 +231,10 @@ export function App() {
           )}
           <AnswerScrollModeBadge active={scrollModeActive} streaming={isAnswerStreaming} />
           <div className="ml-auto flex items-center gap-2">
-            {/* Mode badge — 纯指示当前模式,不可点。切换只走 ⌘⌥E / 托盘:点击切换会激活本 app、
+            {/* Mode badge — 纯指示当前模式,不可点。切换只走 ⌥⌘X / 托盘:点击切换会激活本 app、
                 毛玻璃背景重绘导致"跳一下"。pointerEvents:none 保证它永远不参与鼠标命中。 */}
             <div
-              title="当前模式指示(穿透 / 输入)。切换用 ⌘⌥E 或托盘菜单。"
+              title="当前模式指示(穿透 / 输入)。切换用 ⌥⌘X 或托盘菜单。"
               className="text-xs px-2 py-0.5 rounded select-none"
               style={{
                 background: overlayMode === 'interactive' ? 'rgba(16,185,129,0.2)' : 'rgba(30,30,60,0.5)',

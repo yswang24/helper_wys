@@ -3,22 +3,27 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-export const FN_SHIFT_SHORTCUT_LABEL = 'Fn+Shift'
-const HELPER_EXECUTABLE = 'helper-fn-shift-hotkey'
+export const FN_MODIFIER_SHORTCUT_LABEL = 'Fn+Control / Fn+Shift / Fn+Option / Fn+Command'
+export type FnModifierShortcut = 'control' | 'shift' | 'option' | 'command'
 
-export interface FnShiftHotkeyOptions {
+const HELPER_EXECUTABLE = 'helper-fn-modifier-hotkeys'
+const SHORTCUTS = new Set<FnModifierShortcut>(['control', 'shift', 'option', 'command'])
+
+export interface FnModifierHotkeysOptions {
   resolveExecutable?: () => string
   verifyExecutable?: (path: string) => void
   spawnProcess?: (path: string) => ChildProcess
 }
 
-export interface FnShiftHotkeyPathContext {
+export interface FnModifierHotkeysPathContext {
   isPackaged: boolean
   resourcesPath: string
   appPath: string
 }
 
-export function resolveFnShiftHotkeyExecutablePath(context: FnShiftHotkeyPathContext): string {
+export function resolveFnModifierHotkeysExecutablePath(
+  context: FnModifierHotkeysPathContext
+): string {
   if (context.isPackaged) {
     return resolve(context.resourcesPath, '..', 'Helpers', HELPER_EXECUTABLE)
   }
@@ -26,7 +31,7 @@ export function resolveFnShiftHotkeyExecutablePath(context: FnShiftHotkeyPathCon
 }
 
 function defaultExecutablePath(): string {
-  return resolveFnShiftHotkeyExecutablePath({
+  return resolveFnModifierHotkeysExecutablePath({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath()
@@ -49,15 +54,18 @@ function defaultSpawnProcess(path: string): ChildProcess {
  * Owns the tiny macOS helper that observes only global modifier flags.
  *
  * Electron accelerators cannot express Fn or a modifier-only chord. The native helper polls
- * CoreGraphics' hardware modifier state and emits one line for each Fn+Shift rising edge.
+ * CoreGraphics' hardware modifier state and emits one line for each supported Fn modifier edge.
  */
-export class FnShiftHotkey {
+export class FnModifierHotkeys {
   private child: ChildProcess | null = null
   private stdoutBuffer = ''
 
-  constructor(private readonly options: FnShiftHotkeyOptions = {}) {}
+  constructor(private readonly options: FnModifierHotkeysOptions = {}) {}
 
-  start(onTrigger: () => void, onUnavailable: (reason: string) => void): boolean {
+  start(
+    onTrigger: (shortcut: FnModifierShortcut) => void,
+    onUnavailable: (reason: string) => void
+  ): boolean {
     if (this.child) return true
 
     const executable = (this.options.resolveExecutable ?? defaultExecutablePath)()
@@ -101,7 +109,9 @@ export class FnShiftHotkey {
       while (newline >= 0) {
         const line = this.stdoutBuffer.slice(0, newline).trim()
         this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1)
-        if (line === 'trigger' && this.child === child) onTrigger()
+        if (SHORTCUTS.has(line as FnModifierShortcut) && this.child === child) {
+          onTrigger(line as FnModifierShortcut)
+        }
         newline = this.stdoutBuffer.indexOf('\n')
       }
     })

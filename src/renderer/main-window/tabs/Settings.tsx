@@ -138,7 +138,7 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       {/* Screenshot mode */}
       <div>
         <label className="text-xs font-medium block mb-0.5" style={{ color: '#94a3b8' }}>
-          截图解题模式（⌘⌥S）
+          截图解题模式（⌥⌘Z）
         </label>
         <div className="text-xs mb-1.5" style={{ color: '#334155' }}>
           {screenshotMode === 'direct'
@@ -356,7 +356,7 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
       />
       <Field
         label="视觉模型"
-        hint="支持图像输入，用于 ⌘⌥S 框选和 fn⇧ 全屏直发"
+        hint="支持图像输入，用于 ⌥⌘Z 框选和 fn⇧ 全屏直发"
         value={visionModel}
         onChange={setVisionModel}
         placeholder="Qwen/Qwen2-VL-7B-Instruct"
