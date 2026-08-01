@@ -2,7 +2,7 @@
 
 一个 **macOS** 桌面助手：浮层答案对**屏幕共享不可见**（content protection），交互尽量不抢前台焦点，面试/答疑时在右上角悄悄给提示。
 
-> 仅面向 macOS（Apple Silicon + Intel，Sonoma/Sequoia）。Electron 28 + React 18 + TypeScript。
+> 当前受支持和验收的平台为 macOS 14 Sonoma 或更高版本（Apple Silicon + Intel）。Electron 43.2.0 + React 18.3.1 + TypeScript 5.9.3。
 
 ---
 
@@ -47,21 +47,28 @@
 
 ## 开发与构建
 
-macOS 需安装 Xcode Command Line Tools，用于编译 Fn 修饰键组合的 Universal 原生快捷键组件。
+直接依赖已在 `package.json` 固定到当前验证版本，完整依赖树由 `package-lock.json` 锁定。运行时基线为 Electron 43.2.0、React 18.3.1、OpenAI SDK 6.38.0；构建与测试基线为 electron-vite 5.0.0、Vite 7.3.6、Vitest 4.1.10、TypeScript 5.9.3、ESLint 10.8.0。
+
+支持 Node.js 22.13+（22.x）或 24.0.0 及更高版本，推荐 Node 24 LTS；lockfile 使用 npm 11.11.0 生成并验证（以 `package.json` 的 `engines` / `packageManager` 为准）。macOS 还需安装 Xcode Command Line Tools，用于编译 Fn 修饰键组合的 Universal 原生快捷键组件。首次执行 Electron 命令可能按需下载 43.2.0 二进制，需要联网。
 
 ```bash
-npm install
+npm ci               # 按 lockfile 安装可复现依赖
 npm run dev          # 开发模式
-npm run typecheck    # 主进程 + 渲染层类型检查（构建用 esbuild 不校验类型，提交前跑这个）
-npm run build        # 产物到 out/
+npm run typecheck    # 单独执行主进程 + 渲染层类型检查
+npm test             # Vitest 测试
+npm run lint         # ESLint 检查
+npm run format:check # Prettier 格式检查
+npm run build        # 自动先跑 typecheck，产物到 out/
 npm run package:mac  # 打 macOS dmg（electron-builder，图标取 resources/icon.icns）
 ```
 
 ## 首次配置
 
-1. 启动后进入**设置**页，填两组 Key（密钥用系统钥匙串加密存储）：
-   - **AI 问答（LLM）**：API Key / Base URL / 问答模型 / 视觉模型。内置 DeepSeek、Qwen、GPT-4o、硅基流动等快捷预设。
-   - **语音识别（ASR）**：Whisper 兼容服务，推荐 Groq（免费额度大）。
+1. 启动后进入**设置**页，分别配置三个互不共用 API 的功能（密钥用系统钥匙串加密存储，切换供应商会保留各自档案）：
+   - **文本模型**：文字提问与语音转写后的回答。
+   - **视频 / 视觉模型**：截图识别与图片解题；必须选择明确支持图像输入的模型。
+   - **音频模型（ASR）**：录音转文字。
+   三类配置都提供硅基流动、阿里云百炼、小米 MiMo Token Plan 快速切换。
 2. 没填 Key 时会自动跳到设置页提示。
 
 ## macOS 权限
@@ -92,22 +99,22 @@ macOS 没有系统音频 loopback（那是 Windows 专属），所以用虚拟�
 
 ## 焦点（防切屏检测）
 
-浏览器类判题平台（HackerRank/Coderpad/牛客）盯 `window.blur` / `document.visibilitychange` 来判「切屏」。macOS + Electron 28 上「浮层能打字」与「永不激活本 app」无法靠单窗口同时满足，故拆成**两种模式**，**只用 ⌥⌘X 或托盘切换**（头部徽标只是当前模式指示器、不可点）：
+浏览器类判题平台（HackerRank/Coderpad/牛客）盯 `window.blur` / `document.visibilitychange` 来判「切屏」。macOS + Electron 上「浮层能打字」与「永不激活本 app」无法靠单窗口同时满足，故拆成**两种模式**，**只用 ⌥⌘X 或托盘切换**（头部徽标只是当前模式指示器、不可点）：
 
 | 模式 | 行为 | 焦点 |
 |---|---|---|
 | **穿透 🔒（默认）** | 点击穿到下层，浮层只读展示答案；可用 `fn⌥` 开启临时滚动模式，再用 `↑` / `↓` 翻阅 | `focusable:false` + `showInactive()` + `setIgnoreMouseEvents(true)`，不激活本 app、不抢焦点 |
 | **输入 ✏️** | 可点击、滚动、打字、拖动调位置 | `setFocusable(true)` + `setIgnoreMouseEvents(false)`；**切模式本身不 `focus()`、不激活** |
 
-**已实测确认（macOS 14 / Electron 28.3.3）**：浮层是 `type:'panel'`（非激活面板），输入模式下**点进浮层打字，前台浏览器不会收到 `window.blur`**——即打字不激活本 app、不触发经典「失焦切屏」。因此**无需**升级 Electron 或写原生插件。
+**历史实测确认（macOS 14 / Electron 28.3.3）**：浮层是 `type:'panel'`（非激活面板），输入模式下**点进浮层打字，前台浏览器不会收到 `window.blur`**——即打字不激活本 app、不触发经典「失焦切屏」。当前依赖已升级到 Electron 43.2.0，发布前仍应按实际会议/判题环境复测。
 
-实现要点（`src/main/index.ts` `applyOverlayMode` 等）：
+实现要点（`src/main/overlay-controller.ts` 等）：
 
-- **从不 `show()` / `focus()`，一律 `showInactive()`**：E28 的 `Show()` 会无条件 `activateIgnoringOtherApps:YES`。
-- **从不 `blur()`**：E28 的 `win.blur()` 内部是 `[orderOut:] + [orderBack:]`（把透明合成面摘下屏幕再贴回），会让浮层肉眼「闪一下」。前台焦点靠用户下次点浏览器时自然交还。
+- **从不 `show()` / `focus()`，一律 `showInactive()`**：历史 Electron 28 验证中，`show()` 会激活本 app；Electron 43 继续保持这条非激活路径。
+- **从不 `blur()`**：历史 Electron 28 验证中，`win.blur()` 会把透明窗口移出再放回并造成闪烁；前台焦点靠用户下次点浏览器时自然交还。
 - **切模式不改变窗口位置**：`applyOverlayMode` 切换前后对比 `getPosition` 并强制还原。
 - **拖动调位置**用手动拖（渲染层 `mousedown` → IPC → 主进程按事件 `screenX/Y` 位移 `setPosition`，含 3px 点击阈值），不用 `-webkit-app-region:drag`（在 透明+无边框+panel 下不可靠）。仅输入模式可拖。
-- 保留 `setActivationPolicy('regular')`（留 Dock 图标）；每次显示后重设 `setContentProtection(true)`（E28 hide→show 会丢）。Windows 侧靠 `focusable:false → WS_EX_NOACTIVATE`。
+- 保留 `setActivationPolicy('regular')`（留 Dock 图标）；每次显示后重设 `setContentProtection(true)`，避免窗口隐藏再显示后保护状态漂移。Windows 侧靠 `focusable:false → WS_EX_NOACTIVATE`。
 
 ### 验证方法
 
@@ -118,7 +125,7 @@ addEventListener('blur', () => console.log('%c切屏! window.blur', 'color:red;f
 document.addEventListener('visibilitychange', () => console.log('visibility hidden=' + document.hidden))
 ```
 
-- 打字时**不出现** `切屏! window.blur` = 非激活面板生效、`blur` 这条检测线干净（已确认）。
+- 打字时**不出现** `切屏! window.blur` = 非激活面板生效、`blur` 这条检测线干净。Electron 28 历史基线已确认；Electron 43.2.0 需按上述步骤重新确认。
 - `visibilitychange hidden=` 是另一条独立信号：排查时**全程别切到别的窗口**，单独确认是浮层触发还是自己切窗口的噪音。
 
 ---
@@ -132,6 +139,8 @@ document.addEventListener('visibilitychange', () => console.log('visibility hidd
 
 `fn⇧` 是无需框选的一键路径：截取按键时鼠标所在的整块显示器、显示隐身浮层，并直接发送给
 视觉模型流式解答。它不受「先识别可编辑」设置影响；截图尚未完成时重复触发不会并行抓取。
+截图请求只使用设置页中的独立「视觉模型」配置；`glm-5.2-fast-preview`、`deepseek-chat`
+等纯文本模型不能接收图片，请改用 `qwen3.5-omni-plus` 或其他明确支持图像输入的模型，并先点「测试视觉模型」确认能识别测试图。
 原生组件只轮询 Fn 与 Control/Shift/Option/Command 修饰键状态，不读取字符输入，也无需应用主动请求辅助功能或输入监控权限。
 外接 PC 键盘若在键盘固件内自行处理 Fn、没有把 Fn 上报给 macOS，则无法使用该组合。
 
@@ -150,4 +159,4 @@ document.addEventListener('visibilitychange', () => console.log('visibility hidd
 - 浮层 + 主窗口都 `setContentProtection(true)`（macOS = `NSWindowSharingNone`），对 Zoom/腾讯会议/QuickTime 等标准捕获隐身。**机制可靠，但请用你真实会用的会议软件抽测一次。** 物理拍屏无解。
 - app 身份已脱敏为中性的「Helper」（进程名/窗口标题/托盘）。注意 Electron 子进程会显示成「Helper Helper (GPU)」之类，无害但叠词。
 - **API Key** 经 `safeStorage` 钥匙串加密存盘；**切勿把含密钥的文件提交到仓库**。
-- 已知限制：仅 macOS；"原生系统音频（免 BlackHole）"需升级到更新的 Electron 后实测。
+- 已知限制：当前仅验收 macOS 14+；仓库保留的 Windows / Linux 打包配置属于未验证实验路径，不在支持范围内。"原生系统音频（免 BlackHole）"尚未实现，Electron 43.2.0 下仍需单独开发与实测。

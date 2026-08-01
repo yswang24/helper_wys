@@ -1,5 +1,5 @@
 // 焦点/隐身 spike —— 真机验证用，独立于主应用。
-// 运行：  npx electron spike/focus-overlay.js
+// 运行：  npx --no-install electron spike/focus-overlay.js
 //
 // 目的：验证「点/拖/打字浮层」时，前台浏览器（面试 Tab）会不会触发 blur / visibilitychange。
 // 配套：在浏览器（用真实判题平台，或打开 spike/tab-watch.html）里看 console。
@@ -11,7 +11,7 @@
 const { app, BrowserWindow, globalShortcut, screen } = require('electron')
 
 let win = null
-let focusable = false        // 提议的默认：浮层不可聚焦
+let focusable = false // 提议的默认：浮层不可聚焦
 let contentProtect = true
 
 const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -54,19 +54,26 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 
 function build() {
   win = new BrowserWindow({
-    width: 360, height: 340, x: 60, y: 90,
-    frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: true, hasShadow: false, resizable: true,
+    width: 360,
+    height: 340,
+    x: 60,
+    y: 90,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    resizable: true,
     type: 'panel',
-    focusable,                                   // ← 关键变量（F1 热切换）
+    focusable, // ← 关键变量（F1 热切换）
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   })
   win.setAlwaysOnTop(true, 'screen-saver')
-  win.setContentProtection(contentProtect)       // ← 隐身（F2 热切换）
+  win.setContentProtection(contentProtect) // ← 隐身（F2 热切换）
   win.setIgnoreMouseEvents(true, { forward: true })
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(HTML))
-  win.showInactive()                             // ← 显示但不夺焦（对比 .show()）
+  win.showInactive() // ← 显示但不夺焦（对比 .show()）
 }
 
 // 鼠标穿透轮询：光标在窗口内才接收点击（与主应用一致）
@@ -85,7 +92,7 @@ function startCursorPoll() {
 }
 
 app.whenReady().then(() => {
-  app.setActivationPolicy('accessory')           // 无 Dock / 无菜单栏（隐身 + 配合不夺焦）
+  app.setActivationPolicy('accessory') // 无 Dock / 无菜单栏（隐身 + 配合不夺焦）
   build()
   startCursorPoll()
 
