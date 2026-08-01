@@ -93,7 +93,8 @@ export const SECRET_FIELDS = [
   'asrApiKey'
 ] as const satisfies readonly (keyof PersistedConfig)[]
 
-// One source of defaults, = the union of the three legacy default constants.
+// One source of defaults shared by main and renderer. Vision starts on a real multimodal model;
+// the old deepseek-chat default accepted text only and could never solve screenshots.
 export const DEFAULTS: AppConfig = {
   provider: {
     apiKey: '',
@@ -102,8 +103,8 @@ export const DEFAULTS: AppConfig = {
   },
   vision: {
     apiKey: '',
-    baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-chat'
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3.5-omni-plus'
   },
   asr: {
     apiKey: '',
@@ -157,7 +158,7 @@ export function fromPersisted(raw: PersistedConfig): AppConfig {
       // vision fields are absent so an upgrade keeps screenshot solving functional.
       apiKey: raw.visionApiKey ?? raw.apiKey ?? DEFAULTS.vision.apiKey,
       baseUrl: raw.visionBaseUrl ?? raw.baseUrl ?? DEFAULTS.vision.baseUrl,
-      model: raw.visionModel ?? DEFAULTS.vision.model
+      model: raw.visionModel ?? raw.model ?? DEFAULTS.vision.model
     },
     asr: {
       apiKey: raw.asrApiKey ?? DEFAULTS.asr.apiKey,

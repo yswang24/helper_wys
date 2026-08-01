@@ -72,6 +72,7 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
     setVisionBaseUrl,
     visionModel,
     setVisionModel,
+    visionModelError,
     switchVisionProvider,
     asrApiKey,
     setAsrApiKey,
@@ -361,6 +362,18 @@ export function SettingsTab({ onSaved }: { onSaved?: () => void }) {
         onChange={setVisionModel}
         placeholder="Qwen/Qwen2-VL-7B-Instruct"
       />
+      {visionModelError && (
+        <div
+          className="text-xs rounded-lg px-3 py-2"
+          style={{
+            color: '#fca5a5',
+            background: 'rgba(127, 29, 29, 0.18)',
+            border: '1px solid rgba(248, 113, 113, 0.35)'
+          }}
+        >
+          ⚠ {visionModelError}
+        </div>
+      )}
       <div>
         <div className="text-xs mb-2" style={{ color: '#475569' }}>
           视觉快速切换

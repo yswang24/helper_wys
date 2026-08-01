@@ -120,4 +120,16 @@ describe('independent provider configuration', () => {
     expect(setConfig).not.toHaveBeenCalled()
     expect(result.current.saveErr).toBe('请填写文本 API Key')
   })
+
+  it('refuses to save a known text-only model in the vision slot', async () => {
+    getConfig.mockResolvedValue({ ...loadedConfig(), visionModel: 'glm-5.2-fast-preview' })
+    const { result } = renderHook(() => useConfig())
+    await waitFor(() => expect(result.current.visionModel).toBe('glm-5.2-fast-preview'))
+
+    act(() => result.current.save())
+
+    expect(setConfig).not.toHaveBeenCalled()
+    expect(result.current.saveErr).toContain('仅支持文本输入')
+    expect(result.current.visionModelError).toContain('qwen3.5-omni-plus')
+  })
 })

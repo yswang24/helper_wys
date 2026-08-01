@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { ProviderProfile } from '../../../shared/config'
+import { DEFAULTS, type ProviderProfile } from '../../../shared/config'
+import { getKnownTextOnlyVisionModelError } from '../../../shared/vision-model'
 
 type ScreenshotMode = 'direct' | 'ocr'
 type AnswerLang = 'zh' | 'en' | 'auto'
@@ -43,8 +44,8 @@ export function useConfig(onSaved?: () => void) {
   const [llmProviderProfiles, setLlmProviderProfiles] = useState<ProviderProfile[]>([])
 
   const [visionApiKey, setVisionApiKey] = useState('')
-  const [visionBaseUrl, setVisionBaseUrl] = useState('https://api.deepseek.com')
-  const [visionModel, setVisionModel] = useState('deepseek-chat')
+  const [visionBaseUrl, setVisionBaseUrl] = useState(DEFAULTS.vision.baseUrl)
+  const [visionModel, setVisionModel] = useState(DEFAULTS.vision.model)
   const [visionProviderProfiles, setVisionProviderProfiles] = useState<ProviderProfile[]>([])
 
   const [asrApiKey, setAsrApiKey] = useState('')
@@ -69,8 +70,8 @@ export function useConfig(onSaved?: () => void) {
 
       // Compatibility with old config files where screenshots shared text credentials.
       setVisionApiKey(cfg.visionApiKey ?? cfg.apiKey ?? '')
-      setVisionBaseUrl(cfg.visionBaseUrl || cfg.baseUrl || 'https://api.deepseek.com')
-      setVisionModel(cfg.visionModel || 'deepseek-chat')
+      setVisionBaseUrl(cfg.visionBaseUrl || cfg.baseUrl || DEFAULTS.vision.baseUrl)
+      setVisionModel(cfg.visionModel || cfg.model || DEFAULTS.vision.model)
       setVisionProviderProfiles(cfg.visionProviderProfiles ?? [])
 
       setAsrApiKey(cfg.asrApiKey ?? '')
@@ -159,6 +160,11 @@ export function useConfig(onSaved?: () => void) {
       setSaveErr('视觉 Base URL 需为 HTTPS 地址')
       return
     }
+    const visionModelError = getKnownTextOnlyVisionModelError(visionModel)
+    if (visionModelError) {
+      setSaveErr(visionModelError)
+      return
+    }
     if (!validUrl(asrBaseUrl)) {
       setSaveErr('音频 Base URL 需为 HTTPS 地址')
       return
@@ -217,6 +223,7 @@ export function useConfig(onSaved?: () => void) {
     visionBaseUrl,
     setVisionBaseUrl,
     visionModel,
+    visionModelError: getKnownTextOnlyVisionModelError(visionModel),
     setVisionModel,
     visionProviderProfiles,
     switchVisionProvider,

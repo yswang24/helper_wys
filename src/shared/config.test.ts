@@ -9,15 +9,15 @@ import {
 } from './config'
 
 describe('config unification', () => {
-  it('DEFAULTS flattens to the exact union of the three legacy default constants', () => {
+  it('DEFAULTS flattens to the canonical provider defaults', () => {
     // Hardcoded so a drift in any default is caught. No overlayX/overlayY.
     expect(toPersisted(DEFAULTS)).toEqual({
       apiKey: '',
       baseUrl: 'https://api.deepseek.com',
       model: 'deepseek-chat',
       visionApiKey: '',
-      visionBaseUrl: 'https://api.deepseek.com',
-      visionModel: 'deepseek-chat',
+      visionBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      visionModel: 'qwen3.5-omni-plus',
       asrApiKey: '',
       asrBaseUrl: 'https://api.openai.com/v1',
       asrModel: 'whisper-1',
@@ -62,7 +62,7 @@ describe('config unification', () => {
     const cfg = fromPersisted({
       apiKey: 'legacy-key',
       baseUrl: 'https://legacy.example/v1',
-      visionModel: 'legacy-vision'
+      model: 'legacy-vision'
     })
     expect(cfg.vision).toEqual({
       apiKey: 'legacy-key',

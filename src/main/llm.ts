@@ -1,7 +1,13 @@
 import OpenAI from 'openai'
 import type { BrowserWindow } from 'electron'
+import { DEFAULTS } from '../shared/config'
+import { getKnownTextOnlyVisionModelError } from '../shared/vision-model'
 import { describeApiError } from './apiError'
-import { VISION_PROBE_PNG_B64 } from './visionProbe'
+import {
+  matchesVisionProbeResponse,
+  VISION_PROBE_PNG_B64,
+  VISION_PROBE_PROMPT
+} from './visionProbe'
 import { getOpenAIClient } from './openaiClient'
 
 export interface LLMConfig {
@@ -24,16 +30,16 @@ export interface LLMConfig {
 }
 
 const DEFAULT_CONFIG: LLMConfig = {
-  apiKey: '',
-  baseUrl: 'https://api.deepseek.com',
-  model: 'deepseek-chat',
-  visionApiKey: '',
-  visionBaseUrl: 'https://api.deepseek.com',
-  visionModel: 'deepseek-chat',
-  jobDescription: '',
-  resume: '',
-  answerLang: 'zh',
-  screenshotPrompt: ''
+  apiKey: DEFAULTS.provider.apiKey,
+  baseUrl: DEFAULTS.provider.baseUrl,
+  model: DEFAULTS.provider.model,
+  visionApiKey: DEFAULTS.vision.apiKey,
+  visionBaseUrl: DEFAULTS.vision.baseUrl,
+  visionModel: DEFAULTS.vision.model,
+  jobDescription: DEFAULTS.prompt.jobDescription,
+  resume: DEFAULTS.prompt.resume,
+  answerLang: DEFAULTS.prompt.answerLang,
+  screenshotPrompt: DEFAULTS.prompt.screenshotPrompt
 }
 
 // Used when screenshotPrompt is blank — the original built-in instruction.
@@ -262,6 +268,12 @@ export function streamImageAnswer(
   overlayWindow: BrowserWindow
 ): Promise<void> {
   const model = currentConfig.visionModel || currentConfig.model
+  const unsupportedModelMessage = getKnownTextOnlyVisionModelError(model)
+  if (unsupportedModelMessage) {
+    safeSend(overlayWindow, 'llm:error', { id: null, message: unsupportedModelMessage })
+    notifyMain('llm:error', { id: null, message: unsupportedModelMessage })
+    return Promise.resolve()
+  }
   const promptText = currentConfig.screenshotPrompt?.trim() || DEFAULT_SCREENSHOT_PROMPT
   return streamChat(
     model,
@@ -482,6 +494,8 @@ export async function testVisionConnection(cfg: {
 }): Promise<{ ok: boolean; message: string }> {
   if (!cfg.apiKey) return { ok: false, message: '请先填写 API Key' }
   if (!cfg.visionModel) return { ok: false, message: '请先填写视觉模型名' }
+  const unsupportedModelMessage = getKnownTextOnlyVisionModelError(cfg.visionModel)
+  if (unsupportedModelMessage) return { ok: false, message: unsupportedModelMessage }
   const client = getOpenAIClient({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl, maxRetries: 0 })
   const start = Date.now()
   try {
@@ -496,7 +510,7 @@ export async function testVisionConnection(cfg: {
                 type: 'image_url',
                 image_url: { url: `data:image/png;base64,${VISION_PROBE_PNG_B64}` }
               },
-              { type: 'text', text: '请识别图片中的文字内容，直接输出文字。' }
+              { type: 'text', text: VISION_PROBE_PROMPT }
             ]
           }
         ],
@@ -505,6 +519,13 @@ export async function testVisionConnection(cfg: {
       },
       { signal: AbortSignal.timeout(20000) }
     )
+    const content = r.choices[0]?.message?.content
+    if (!matchesVisionProbeResponse(content)) {
+      return {
+        ok: false,
+        message: '接口已响应，但模型未正确识别测试图片内容。请确认所选模型支持图片输入。'
+      }
+    }
     return {
       ok: true,
       message: `连接成功 · 模型 ${r.model || cfg.visionModel} · ${Date.now() - start}ms`
