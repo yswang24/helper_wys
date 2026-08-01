@@ -1,6 +1,7 @@
 import { app, BrowserWindow, globalShortcut, session } from 'electron'
 import { File as NodeFile } from 'node:buffer'
-// Node 18 doesn't expose File as a global; openai SDK requires it for multipart uploads
+// Keep a startup-order-safe fallback for Electron/Node runtimes where File is not global yet;
+// the OpenAI SDK needs it while preparing multipart audio uploads.
 ;(globalThis as unknown as Record<string, unknown>).File ??= NodeFile
 
 import {

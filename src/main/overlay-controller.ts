@@ -144,7 +144,7 @@ export class OverlayController {
       this.userVisible = true
       this.win.showInactive() // 不用 show():show() 会激活本 app → 触发前台窗口切屏
       this.win.setAlwaysOnTop(true, 'screen-saver')
-      this.win.setContentProtection(true) // hide→show 后内容保护可能丢失(E28),重设
+      this.win.setContentProtection(true) // Reassert after hide→show across Electron upgrades.
       this.deps.onVisibilityChange()
     }
   }
@@ -161,7 +161,8 @@ export class OverlayController {
     } else {
       this.win.setIgnoreMouseEvents(true)
       this.win.setFocusable(false)
-      // 不 blur():win.blur()=[orderOut:]+[orderBack:] 会摘面重贴 → 闪。焦点靠用户下次点浏览器自然交还。
+      // 不 blur():Electron 28 中会摘面重贴并闪烁；Electron 43 保守沿用该路径并需真机回归。
+      // 焦点靠用户下次点浏览器自然交还。
     }
     // 硬保证:切模式绝不改变窗口位置。
     const [nx, ny] = this.win.getPosition()
@@ -200,7 +201,7 @@ export class OverlayController {
       if (this.userVisible && !this.win.isVisible()) {
         this.win.showInactive() // 恢复也用非激活方式,避免切屏
         this.win.setAlwaysOnTop(true, 'screen-saver')
-        this.win.setContentProtection(true) // 恢复后重设内容保护(E28 hide→show 会丢)
+        this.win.setContentProtection(true) // Reassert protection after restoring the window.
         if (!this.interactive) this.win.setIgnoreMouseEvents(true) // 重新落实穿透态
         this.deps.onVisibilityChange() // visibility changed → refresh the tray label
       }

@@ -10,7 +10,9 @@ const winEvents = new Map<string, (...a: unknown[]) => void>()
 const wcEvents = new Map<string, (...a: unknown[]) => void>()
 
 vi.mock('electron', () => ({
-  BrowserWindow: vi.fn(() => fake),
+  BrowserWindow: vi.fn(function BrowserWindowMock() {
+    return fake
+  }),
   screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 3000, height: 3000 } }) }
 }))
 
