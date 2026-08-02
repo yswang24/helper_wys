@@ -117,7 +117,7 @@ const conversationHistory: HistoryRound[] = []
 const MAX_HISTORY_ROUNDS = 5
 // Secondary cap (on top of round count): keep only the most recent rounds that fit this many
 // chars, so a few long code answers can't bloat the prompt and inflate time-to-first-token.
-const MAX_HISTORY_CHARS = 6000
+const MAX_HISTORY_CHARS = 10000
 
 export function clearHistory(): void {
   conversationHistory.length = 0
